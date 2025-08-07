@@ -2613,6 +2613,35 @@ executable typeclass-pos
     hs-source-dirs:   app
                     , typeclasses/pos
 
+flag clash-pos
+    default: False
+
+executable clash-pos
+    import:           common-ghc-options
+    main-is:          Main.hs
+    if !flag(clash-pos) && flag(stack)
+      buildable:      False
+
+    other-modules:    GHC.Num.Natural_LHAssumptions
+                    , TypeNat00
+                    , TypeNat01
+                    , TypeNat02
+                    , TypeNat03
+                    , TypeNat04
+                    , TypeNat05
+                    , BitVec00
+                    , BitVec01
+                    , NatConstraints00
+                    , NatConstraints01
+                    , NatConstraints02
+
+    build-depends:    base
+                    , liquid-prelude
+                    , liquidhaskell
+
+    hs-source-dirs:   app
+                    , clash/pos
+
 -- This test suite is for internal function unit tests, not for checking LH on
 -- source files.
 test-suite tasty
