@@ -45,6 +45,8 @@
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeApplications           #-}
+{-# LANGUAGE RankNTypes #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Language.Haskell.Liquid.LHNameResolution
   ( resolveLHNames
@@ -54,6 +56,7 @@ module Language.Haskell.Liquid.LHNameResolution
   , toBareSpecLHName
   , symbolToLHName
   , LogicNameEnv(..)
+  , runUniqueMFIXME
   ) where
 
 import qualified Liquid.GHC.API         as GHC hiding (Expr, panic)
@@ -81,6 +84,7 @@ import           Data.List.Extra (dropEnd)
 import qualified Data.Map as Map
 import           Data.Maybe (mapMaybe, maybeToList)
 import qualified Data.Text                               as Text
+import           Data.Word (Word64)
 import qualified GHC.Types.Name.Occurrence
 
 import           Language.Fixpoint.Types as F hiding (Error, panic)
@@ -97,6 +101,12 @@ import           Language.Haskell.Liquid.WiredIn
 
 import qualified Text.PrettyPrint.HughesPJ as PJ
 import qualified Text.Printf               as Printf
+
+instance LHUniqueM Identity where
+  freshLHUnique = Identity (LHUnique 0)
+
+runUniqueMFIXME :: (forall m . LHUniqueM m => m a) -> a
+runUniqueMFIXME m = runIdentity m
 
 -- | Collects type aliases from the current module and its dependencies.
 --
@@ -165,7 +175,7 @@ resolveLHNames
   -> TargetDependencies
   -> Either [Error] (BareSpec, LogicNameEnv, LogicMap)
 resolveLHNames cfg thisModule localVars impMods globalRdrEnv bareSpec0 dependencies =
-  flip evalState RenameOutput { roErrors = [], roUsedNames = [], roUsedDataCons = mempty } $
+  flip evalState RenameOutput { roErrors = [], roUsedNames = [], roUsedDataCons = mempty, roUnique = wiredInUniqueBound  } $
     runExceptT $ do
       -- Prepare type aliases for resolution.
       sp0 <- lift $ fixExpressionArgsOfTypeAliases taliases $ resolveBoundVarsInTypeAliases bareSpec0
@@ -227,13 +237,13 @@ resolveLHNames cfg thisModule localVars impMods globalRdrEnv bareSpec0 dependenc
     lmap =
         (LH.listLMap <>) $
         mconcat $
-        map (mkLogicMap . HM.map (fmap lhNameToResolvedSymbol) . liftedDefines) $
+        map (mkLogicMap . HM.mapKeys lhNameToResolvedSymbol . HM.map (fmap lhNameToResolvedSymbol) . liftedDefines) $
         HM.elems $
         getDependencies dependencies
 
     resolveFieldLogicName n =
       case n of
-        LHNUnresolved LHLogicNameBinder s -> pure $ makeLogicLHName s thisModule Nothing
+        LHNUnresolved LHLogicNameBinder s -> makeLogicLHName s thisModule Nothing
         _ -> panic Nothing $ "unexpected name: " ++ show n
 
     resolveLHName lname =
@@ -252,7 +262,7 @@ resolveLHNames cfg thisModule localVars impMods globalRdrEnv bareSpec0 dependenc
               -- any imported aliases with the same name.
               -- This allows the user to shadow imported aliases.
               FoundTypeAliases { tarLocallyDefined = [(m, _, _)] } ->
-                pure $ makeLogicLHName (LH.dropModuleNames s) m Nothing
+                makeLogicLHName (LH.dropModuleNames s) m Nothing
               FoundTypeAliases { tarImported = [(_, lh, _)]
                                , tarLocallyDefined = []} | lcl == LHAnyModuleNameF ->
                 pure lh
@@ -270,7 +280,7 @@ resolveLHNames cfg thisModule localVars impMods globalRdrEnv bareSpec0 dependenc
           | otherwise ->
               lookupGRELHName [] ns lname s
         LHNUnresolved LHLogicNameBinder s ->
-          pure $ makeLogicLHName s thisModule Nothing
+          makeLogicLHName s thisModule Nothing
         n@(LHNUnresolved LHLogicName _) ->
           -- This one will be resolved by resolveLogicNames
           pure n
@@ -375,7 +385,14 @@ data RenameOutput = RenameOutput
     , roUsedNames :: [LHName]
       -- | Names of used data constructors
     , roUsedDataCons :: HS.HashSet LHName
+    , roUnique :: Word64
     }
+
+instance Monad m => LHUniqueM (StateT RenameOutput m) where
+  freshLHUnique = do
+    res <- gets roUnique
+    modify (\ro -> ro { roUnique = res + 1 })
+    return $ LHUnique res
 
 addError :: Error -> State RenameOutput ()
 addError e = modify (\ro -> ro { roErrors = e : roErrors ro })
@@ -426,7 +443,7 @@ resolveBoundVarsInTypeAliases = updateAliases resolveBoundVars
     resolveBoundVars boundVars = \case
       LHNUnresolved (LHTcName lcl) s ->
         if elem s boundVars then
-          LHNResolved (LHRLocal s) s
+          LHNResolved (LHRLocal s (runUniqueMFIXME freshLHUnique)) s
         else
           LHNUnresolved (LHTcName lcl) s
       n ->
@@ -438,7 +455,7 @@ resolveBoundVarsInTypeAliases = updateAliases resolveBoundVars
        spec
             { aliases = [ a { rtBody = mapLHNames (f args) (rtBody a) }
                         | a <- aliases spec
-                        , let args = rtTArgs a ++ rtVArgs a
+                        , let args = rtTArgs a ++ (F.symbol <$> rtVArgs a)
                         ]
             }
 
@@ -806,7 +823,7 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
     resolveLogicName :: [Symbol] -> LocSymbol -> State RenameOutput LHName
     resolveLogicName ss ls
         -- The name is local
-      | elem s ss = return $ makeLocalLHName s
+      | elem s ss = return $ runUniqueMFIXME $ makeLocalLHName s
       | otherwise =
         case lookupInScopeEnv env s of
           Left alts ->
@@ -816,20 +833,20 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
               Just m -> m
               Nothing
                 | elem s wiredInNames ->
-                  return $ makeLocalLHName s
+                  return $ runUniqueMFIXME $ makeLocalLHName s
                 | otherwise -> do
                     addError $ errResolve alts "logic name" "Cannot resolve name" ls
-                    return $ makeLocalLHName s
+                    return $ runUniqueMFIXME $ makeLocalLHName s
           Right [(_, lhname, _)] -> pure lhname
           -- In case of multiple matches, we give precedence to locally defined
           -- logic entities for the user to be able to overwrite them.
           -- TODO: When a mechanism allowing to specify explicitly which logic names
           -- are imported is in place, we should cosider notifying the ambiguity directly.
           Right names ->
-            case filter ((== thisModule) . logicNameOriginModule . Misc.snd3) names of
+            case filter ((== GHC.moduleName thisModule) . logicNameOriginModule . Misc.snd3) names of
               [(_, lhname, _)] -> pure lhname
               _ -> do addError $ errDupInScopeNames ls names
-                      return $ makeLocalLHName s
+                      return $ runUniqueMFIXME $ makeLocalLHName s
       where
         s = val ls
         wiredInNames =
@@ -848,12 +865,12 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
 
     resolveDataConName ls
       | unqualifiedS == ":" = Just $
-        return $ makeLogicLHName unqualifiedS (GHC.nameModule consDataConName) (Just consDataConName)
+        return $ runUniqueMFIXME $ makeLogicLHName unqualifiedS (GHC.nameModule consDataConName) (Just consDataConName)
       | unqualifiedS == "[]" = Just $
-        return $ makeLogicLHName unqualifiedS (GHC.nameModule nilDataConName) (Just nilDataConName)
+        return $ runUniqueMFIXME $ makeLogicLHName unqualifiedS (GHC.nameModule nilDataConName) (Just nilDataConName)
       | Just arity <- isTupleDC (symbolText s) = Just $
           let dcName = tupleDataConName arity
-           in return $ makeLogicLHName s (GHC.nameModule dcName) (Just dcName)
+           in return $ runUniqueMFIXME $ makeLogicLHName s (GHC.nameModule dcName) (Just dcName)
       where
         unqualifiedS = LH.dropModuleNames s
         nilDataConName = GHC.getName $ GHC.dataConWorkId GHC.nilDataCon
@@ -871,7 +888,7 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
         [e] -> do
           let n = GHC.greName e
           Just $ do
-            let lhName = makeLogicLHName (symbol $ GHC.getOccString n) (GHC.nameModule n) (Just n)
+            let lhName = runUniqueMFIXME $ makeLogicLHName (symbol $ GHC.getOccString n) (GHC.nameModule n) (Just n)
             addName lhName
             addDataConsName lhName
             return lhName
@@ -886,7 +903,7 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
                  (pprint $ val s)
                  (map (PJ.text . GHC.showPprUnsafe) es)
               )
-            return $ makeLocalLHName $ val s
+            return $ runUniqueMFIXME $ makeLocalLHName $ val s
 
     -- Resolves names of reflected functions or names in the logic map
     --
@@ -902,7 +919,7 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
       case refls of
         [lhName] -> Just $ return lhName
         _ | HS.member s privateReflectNames
-          -> Just $ return $ makeLocalLHName (val s)
+          -> Just $ return $ runUniqueMFIXME $ makeLocalLHName (val s)
           | otherwise
           -> case gres of
           [e] -> do
@@ -910,7 +927,7 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
             -- See [NOTE:EXPRESSION-ALIASES]
             if HM.member (symbol n) (lmSymDefs lmap) || HS.member (symbol n) depsInlinesAndDefines then
               Just $ do
-                let lhName = makeLogicLHName (symbol $ GHC.getOccString n) (GHC.nameModule n) Nothing
+                let lhName = runUniqueMFIXME $ makeLogicLHName (symbol $ GHC.getOccString n) (GHC.nameModule n) Nothing
                 addName lhName
                 return lhName
             else
@@ -926,7 +943,7 @@ resolveLogicNames cfg thisModule env globalRdrEnv lmap0 localVars lnameEnv priva
                    (pprint $ val s)
                    (map (PJ.text . GHC.showPprUnsafe) es)
                  )
-              return $ makeLocalLHName $ val s
+              return $ runUniqueMFIXME $ makeLocalLHName $ val s
 
     findReflection :: GHC.Name -> Maybe LHName
     findReflection n = GHC.lookupNameEnv (lneReflected lnameEnv) n
@@ -974,11 +991,11 @@ toBareSpecLHName cfg lenv sp0 = runIdentity $ go sp0
 -- bounded variables) or are explicitly left unhandled.
 symbolToLHName :: String -> LogicNameEnv -> HS.HashSet Symbol -> [Symbol] -> Symbol -> Identity LHName
 symbolToLHName caller lenv unhandledNames ss s
-  | elem s ss = return $ makeLocalLHName s
+  | elem s ss = return $ runUniqueMFIXME $ makeLocalLHName s
   | otherwise =
     case lookupSEnv s (lneLHName lenv) of
       Nothing -> do
         unless (HS.member s unhandledNames) $
           panic Nothing $ caller ++ ": cannot find " ++ show s
-        return $ makeLocalLHName s
+        return $ runUniqueMFIXME $ makeLocalLHName s
       Just lhname -> return lhname

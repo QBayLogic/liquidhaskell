@@ -62,6 +62,7 @@ import Control.Monad (mapM)
 import qualified Data.List as L
 
 import GHC.Base (Int(I#))
+import Language.Haskell.Liquid.LHNameResolution (runUniqueMFIXME)
 
 --------------------------------------------------------------------------------
 makeHaskellMeasures :: Config -> GhcSrc -> Bare.TycEnv -> LogicMap -> Ms.BareSpec
@@ -235,7 +236,7 @@ dataConDecl d     = {- F.notracepp msg $ -} DataCtor dx (F.symbol <$> as) [] xts
   where
     isGadt        = not (Ghc.isVanillaDataCon d)
     -- msg           = printf "dataConDecl (gadt = %s)" (show isGadt)
-    xts           = [(makeGeneratedLogicLHName $ Bare.makeDataConSelector Nothing d i, RT.bareOfType t) | (i, t) <- its ]
+    xts           = [(runUniqueMFIXME $ makeGeneratedLogicLHName $ Bare.makeDataConSelector Nothing d i, RT.bareOfType t) | (i, t) <- its ]
     dx            = makeGHCLHNameLocated d
     its           = zip [1..] ts
     (as,_ps,ts,ty)  = Ghc.dataConSig d
@@ -276,11 +277,11 @@ makeMeasureSelectors cfg dm (Loc l l' c)
       | isFunTy t && not (higherOrderFlag cfg)
       = Nothing
       | otherwise
-      = Just $ makeMeasureSelector (Loc l l' (makeGeneratedLogicLHName $ Bare.makeDataConSelector (Just dm) dc i)) (projT i) dc n i
+      = Just $ makeMeasureSelector (Loc l l' (runUniqueMFIXME $ makeGeneratedLogicLHName $ Bare.makeDataConSelector (Just dm) dc i)) (projT i) dc n i
 
     fields   = zip (reverse xts) [1..]
     n        = length xts
-    checker  = makeMeasureChecker (Loc l l' (makeGeneratedLogicLHName $ Bare.makeDataConChecker dc)) checkT dc n
+    checker  = makeMeasureChecker (Loc l l' (runUniqueMFIXME $ makeGeneratedLogicLHName $ Bare.makeDataConChecker dc)) checkT dc n
     projT i  = dataConSel permitTC dc n (Proj i)
     checkT   = dataConSel permitTC dc n Check
     permitTC = typeclass cfg
@@ -431,9 +432,7 @@ makeOpaqueReflMeasures env measEnv specs eqs =
     requestedOpaqueRefl = S.unions
       . map (S.map getVar . Ms.opaqueReflects . snd)
       . M.toList $ specs
-    getVar sym = case Bare.lookupGhcIdLHName env sym of
-      Right x -> x
-      Left _ -> panic (Just $ GM.fSrcSpan sym) "function to reflect not in scope"
+    getVar sym = Bare.lookupGhcIdLHName env sym
     definedSymbols = getDefinedSymbolsInLogic env measEnv specs
     undefinedInLogic v = not (S.member (F.symbol v) definedSymbols)
     -- Variables to consider

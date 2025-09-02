@@ -627,7 +627,7 @@ instance TyConable BTyCon where
     LHNUnresolved _ s -> ppTycon s
     LHNResolved rn _ -> case rn of
       LHRGHC n -> text $ showPpr n
-      LHRLocal s -> ppTycon s
+      LHRLocal s _ -> ppTycon s
       LHRIndex i -> text $ "(Unknown LHRIndex " ++ show i ++ ")"
       LHRLogic _ -> ppTycon $ lhNameToResolvedSymbol $ F.val $ btc_tc b
 
@@ -648,7 +648,7 @@ instance F.Fixpoint BTyCon where
     LHNUnresolved _ s -> text $ F.symbolString s
     LHNResolved rn _ -> case rn of
       LHRGHC n -> text $ F.symbolString $ F.symbol n
-      LHRLocal s -> text $ F.symbolString s
+      LHRLocal s _ -> text $ F.symbolString s
       LHRIndex i -> panic (Just $ fSrcSpan b) $ "toFix BTyCon: Unknown LHRIndex " ++ show i
       LHRLogic _ -> text $ F.symbolString $ lhNameToResolvedSymbol $ F.val $ btc_tc b
 
@@ -665,7 +665,7 @@ instance F.PPrint BTyCon where
     LHNUnresolved _ s -> text $ F.symbolString s
     LHNResolved rn _ -> case rn of
       LHRGHC n -> text $ F.symbolString $ F.symbol n
-      LHRLocal s -> text $ F.symbolString s
+      LHRLocal s _ -> text $ F.symbolString s
       LHRIndex i -> text $ "(Unknown LHRIndex " ++ show i ++ ")"
       LHRLogic _ -> text $ F.symbolString $ lhNameToResolvedSymbol $ F.val $ btc_tc b
 

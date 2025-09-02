@@ -1,12 +1,18 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Language.Haskell.Liquid.Types.Names
   ( CompatibleBinder(..)
   , lenLocSymbol
@@ -17,6 +23,9 @@ module Language.Haskell.Liquid.Types.Names
   , tyTupleSizedSymbol
   , isTyTupleSizedSymbol
   , tmTupleSizedSymbol
+  , LHUnique (LHUnique)
+  , LHUniquable (..)
+  , LHUniqueM (..)
   , LogicName (..)
   , LHResolvedName (..)
   , LHName (..)
@@ -53,18 +62,20 @@ import qualified Data.Binary as B
 import Data.Data (Data, gmapM, gmapT)
 import Data.Generics (extM, extT)
 import Data.Hashable
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, isJust)
 import Data.String (fromString)
 import qualified Data.Text                               as Text
+import Data.Word (Word64)
 import GHC.Generics
 import GHC.Show
 import GHC.Stack
+import GHC.Types (Any)
 import Language.Fixpoint.Types
 import Language.Haskell.Liquid.GHC.Misc ( locNamedThing ) -- Symbolic GHC.Name
 import Text.Read (readMaybe)
 import qualified Liquid.GHC.API as GHC
+import Language.Haskell.TH.Syntax (Quote, Exp, Lift (..), unsafeCodeCoerce)
 
-import GHC.Types (Any)
 
 propSymbol :: Symbol
 propSymbol = "Language.Haskell.Liquid.ProofCombinators.prop"
@@ -112,6 +123,60 @@ tmTupleSizedSymbol n | n < 0     = error "tmTupleSizedSymbol: negative arity"
                      | n == 1    = "MkSolo"
                      | otherwise = symbol $ "(" <> replicate (n - 1) ',' <> ")"
 
+isWiredIn :: GHC.Uniquable a => a -> Bool
+isWiredIn = isJust . GHC.lookupKnownKeyName . GHC.getUnique
+
+liftWiredInGhcName :: Quote m => GHC.Name -> m Exp
+liftWiredInGhcName n | isWiredIn n =
+  let u = GHC.unpkUnique $ GHC.getUnique n
+  in [| fromJust $ GHC.lookupKnownKeyName $ uncurry GHC.mkUnique $(lift u) |]
+liftWiredInGhcName n =
+  error $ "Cannot lift non-wired-in GHC name " <> show n
+
+data LHUnique
+  -- | The canonical way to construct a 'GhcUnique' is to use 'getLHUnique'.
+  -- This leaves room to fix things up in the case that future GHC versions
+  -- un-wire-in names that LH considers wired in. Accordingly there is no
+  -- 'LHUniquable' instance for 'GHC.Unique', since a LH mapping from ghc's
+  -- names to 'LHUnique' would necessarily need to consider an actual name,
+  -- rather than only a non-wired-in 'GHC.Unique' value.
+  = GhcUnique {-# UNPACK #-} !GHC.UniqueClass {-# UNPACK #-} !GHC.UniqueId
+  | LHUnique {-# UNPACK #-} !Word64
+  deriving (Eq, Ord, Generic, Data)
+  deriving (Hashable, B.Binary) via Generically LHUnique
+
+instance NFData LHUnique
+
+instance Lift LHUnique where
+  liftTyped = unsafeCodeCoerce . lift
+  lift (GhcUnique c u) =
+    let uniq = GHC.mkUnique c u in
+    if isWiredIn uniq
+      then [| GhcUnique $(lift c) $(lift u) |]
+      else error $ "Cannot lift non-wired-in GHC unique " <> show uniq
+  lift (LHUnique u) =
+    [| LHUnique $(lift u) |]
+
+instance GHC.Binary LHUnique where
+  get bh = do
+    tag <- GHC.getByte bh
+    case tag of
+      0 -> GhcUnique <$> GHC.get bh <*> GHC.get bh
+      1 -> LHUnique  <$> GHC.get bh
+      _ -> error "GHC.Binary: invalid tag for LHUnique"
+
+class LHUniquable a where
+  getLHUnique :: a -> LHUnique
+
+instance LHUniquable LHUnique where
+  getLHUnique = id
+
+instance LHUniquable GHC.Name where
+  getLHUnique = uncurry GhcUnique . GHC.unpkUnique . GHC.getUnique
+
+class Monad m => LHUniqueM m where
+  freshLHUnique :: m LHUnique
+
 -- | A name for an entity that does not exist in Haskell
 --
 -- For instance, this can be used to represent predicate aliases
@@ -121,18 +186,33 @@ data LogicName =
        -- | Unqualified symbol
       !Symbol
         -- | Module where the entity was defined
-      !GHC.Module
+      !GHC.ModuleName
         -- | If the named entity is the reflection of some Haskell name
       !(Maybe GHC.Name)
-    | GeneratedLogicName Symbol
+      !LHUnique
+    | GeneratedLogicName !Symbol !LHUnique
   deriving (Data, Eq, Generic)
+
+instance LHUniquable LogicName where
+  getLHUnique (LogicName _ _ _ u) = u
+  getLHUnique (GeneratedLogicName _ u) = u
+
+instance Lift LogicName where
+  liftTyped = unsafeCodeCoerce . lift
+  lift (LogicName s (GHC.moduleNameString -> m) maybeName u) =
+    let n' = case maybeName of
+          Nothing -> [| Nothing |]
+          Just n  -> [| Just $(liftWiredInGhcName n) |]
+    in [| LogicName $(lift s) (GHC.mkModuleName $(lift m)) $(n') $(lift u) |]
+  lift (GeneratedLogicName s u) =
+    [| GeneratedLogicName $(lift s) $(lift u) |]
 
 -- | A name whose procedence is known.
 data LHResolvedName
     = LHRLogic !LogicName
-    | LHRGHC !GHC.Name    -- ^ A name for an entity that exists in Haskell
-    | LHRLocal !Symbol    -- ^ A name for a local variable, e.g. one that is
-                          --   bound by a type alias.
+    | LHRGHC !GHC.Name           -- ^ A name for an entity that exists in Haskell
+    | LHRLocal !Symbol !LHUnique -- ^ A name for a local variable, e.g. one that is
+                                 --   bound by a type alias.
     | -- | The index of a name in some environment
       --
       -- Before serializing names, they are converted to indices. The names
@@ -140,6 +220,20 @@ data LHResolvedName
       -- separately. This is to acommodate how GHC serializes its Names.
       LHRIndex Word
   deriving (Data, Eq, Generic, Ord)
+
+instance LHUniquable LHResolvedName where
+  getLHUnique = \case
+    LHRLogic name -> getLHUnique name
+    LHRGHC   name -> getLHUnique name
+    LHRLocal _ u  -> u
+    LHRIndex _    -> error "getLHUnique of LHRIndex"
+
+instance Lift LHResolvedName where
+  liftTyped = unsafeCodeCoerce . lift
+  lift (LHRLogic n)   = [| LHRLogic $(lift n) |]
+  lift (LHRGHC n)     = [| LHRGHC $(liftWiredInGhcName n) |]
+  lift (LHRLocal _ _) = error "Cannot lift LHRLocal"
+  lift (LHRIndex _)   = error "Cannot lift LHRIndex"
 
 -- | A name that is potentially unresolved, carrying along the 'Symbol'
 -- found by the parser.
@@ -149,6 +243,16 @@ data LHName
       LHNResolved !LHResolvedName !Symbol
     | LHNUnresolved !LHNameSpace !Symbol
   deriving (Data, Generic)
+
+instance Lift LHName where
+  liftTyped = unsafeCodeCoerce . lift
+  lift (LHNResolved n s)   = [| LHNResolved $(lift n) $(lift s) |]
+  lift (LHNUnresolved _ _) = error "Cannot lift LHNUnresolved"
+
+instance LHUniquable LHName where
+  getLHUnique = \case
+    LHNResolved   name _ -> getLHUnique name
+    LHNUnresolved _ _    -> error "getLHUnique of LHNUnresolved"
 
 -- | An Eq instance that ignores the Symbol in resolved names
 instance Eq LHName where
@@ -191,13 +295,13 @@ instance NFData LHThisModuleNameFlag
 instance Hashable LHThisModuleNameFlag
 
 instance Ord LogicName where
-  compare (LogicName s1 m1 _) (LogicName s2 m2 _) =
+  compare (LogicName s1 m1 _ _) (LogicName s2 m2 _ _) =
     case compare s1 s2 of
-      EQ -> GHC.stableModuleCmp m1 m2
+      EQ -> GHC.stableModuleNameCmp m1 m2
       x -> x
   compare LogicName{} GeneratedLogicName{} = LT
   compare GeneratedLogicName{} LogicName{} = GT
-  compare (GeneratedLogicName s1) (GeneratedLogicName s2) = compare s1 s2
+  compare (GeneratedLogicName s1 _) (GeneratedLogicName s2 _) = compare s1 s2
 
 instance Show LHName where
   showsPrec d n0 = showParen (d > app_prec) $ case n0 of
@@ -218,21 +322,21 @@ instance Show LHResolvedName where
   showsPrec d n0 = showParen (d > app_prec) $ case n0 of
       LHRGHC n1 -> showString "LHRGHC " . showString (GHC.showPprDebug n1)
       LHRLogic n1 -> showString "LHRLogic " . showsPrec (app_prec + 1) n1
-      LHRLocal n1 -> showString "LHRLocal " . showsPrec (app_prec + 1) n1
+      LHRLocal n1 _ -> showString "LHRLocal " . showsPrec (app_prec + 1) n1
       LHRIndex i -> showString "LHRIndex " . showsPrec (app_prec + 1) i
     where
       app_prec = 10
 
 instance Show LogicName where
   showsPrec d n0 = showParen (d > app_prec) $ case n0 of
-      LogicName s1 m mr ->
+      LogicName s1 m mr _ ->
         showString "LogicName " .
         showsPrec (app_prec + 1) s1 .
         showSpace .
         showString (GHC.showPprDebug m) .
         showSpace .
         showsPrecMaybeName mr
-      GeneratedLogicName s1 ->
+      GeneratedLogicName s1 _ ->
         showString "GeneratedLogicName " .
         showsPrec (app_prec + 1) s1
     where
@@ -250,14 +354,14 @@ instance Hashable LHResolvedName where
   hashWithSalt s (LHRLogic n) = s `hashWithSalt` (0::Int) `hashWithSalt` n
   hashWithSalt s (LHRGHC n) =
     s `hashWithSalt` (1::Int) `hashWithSalt` GHC.getKey (GHC.nameUnique n)
-  hashWithSalt s (LHRLocal n) = s `hashWithSalt` (2::Int) `hashWithSalt` n
+  hashWithSalt s (LHRLocal n _) = s `hashWithSalt` (2::Int) `hashWithSalt` n
   hashWithSalt s (LHRIndex w) = s `hashWithSalt` (3::Int) `hashWithSalt` w
 
 instance Hashable LogicName where
-  hashWithSalt s (LogicName sym m _) =
+  hashWithSalt s (LogicName sym m _ _) =
         s `hashWithSalt` sym
-          `hashWithSalt` GHC.moduleStableString m
-  hashWithSalt s (GeneratedLogicName sym) =
+          `hashWithSalt` GHC.moduleNameString m
+  hashWithSalt s (GeneratedLogicName sym _) =
         s `hashWithSalt` sym
 
 instance B.Binary LHName
@@ -265,12 +369,12 @@ instance B.Binary LHResolvedName where
   get = do
     tag <- B.getWord8
     case tag of
-      0 -> LHRLocal . fromString <$> B.get
+      0 -> LHRLocal . fromString <$> B.get <*> B.get
       1 -> LHRIndex <$> B.get
       _ -> error "B.Binary: invalid tag for LHResolvedName"
   put (LHRLogic _n) = error "cannot serialize LHRLogic"
   put (LHRGHC _n) = error "cannot serialize LHRGHC"
-  put (LHRLocal s) = B.putWord8 0 >> B.put (symbolString s)
+  put (LHRLocal s _) = B.putWord8 0 >> B.put (symbolString s)
   put (LHRIndex n) = B.putWord8 1 >> B.put n
 
 instance GHC.Binary LHResolvedName where
@@ -279,24 +383,24 @@ instance GHC.Binary LHResolvedName where
     case tag of
       0 -> LHRLogic <$> GHC.get bh
       1 -> LHRGHC <$> GHC.get bh
-      2 -> LHRLocal . fromString <$> GHC.get bh
+      2 -> LHRLocal <$> (fromString <$> GHC.get bh) <*> GHC.get bh
       _ -> error "GHC.Binary: invalid tag for LHResolvedName"
   put_ bh (LHRLogic n) = GHC.putByte bh 0 >> GHC.put_ bh n
   put_ bh (LHRGHC n) = GHC.putByte bh 1 >> GHC.put_ bh n
-  put_ bh (LHRLocal n) = GHC.putByte bh 2 >> GHC.put_ bh (symbolString n)
+  put_ bh (LHRLocal n _) = GHC.putByte bh 2 >> GHC.put_ bh (symbolString n)
   put_ _bh (LHRIndex _n) = error "GHC.Binary: cannot serialize LHRIndex"
 
 instance GHC.Binary LogicName where
   get bh = do
     tag <- GHC.getByte bh
     case tag of
-      0 -> LogicName . fromString <$> GHC.get bh <*> GHC.get bh <*> GHC.get bh
-      1 -> GeneratedLogicName . fromString <$> GHC.get bh
+      0 -> LogicName . fromString <$> GHC.get bh <*> GHC.get bh <*> GHC.get bh <*> GHC.get bh
+      1 -> GeneratedLogicName <$> (fromString <$> GHC.get bh) <*> GHC.get bh
       _ -> error "GHC.Binary: invalid tag for LogicName"
-  put_ bh (LogicName s m r) = do
+  put_ bh (LogicName s m r _) = do
     GHC.putByte bh 0
     GHC.put_ bh (symbolString s) >> GHC.put_ bh m >> GHC.put_ bh r
-  put_ bh (GeneratedLogicName s) = do
+  put_ bh (GeneratedLogicName s _) = do
     GHC.putByte bh 1
     GHC.put_ bh (symbolString s)
 
@@ -317,14 +421,20 @@ makeGHCLHNameFromId x =
               _ -> GHC.getName x
      in makeGHCLHName n (symbol n)
 
-makeLocalLHName :: Symbol -> LHName
-makeLocalLHName s = LHNResolved (LHRLocal s) s
+makeLocalLHName :: LHUniqueM m => Symbol -> m LHName
+makeLocalLHName s = do
+  u <- freshLHUnique
+  return $ LHNResolved (LHRLocal s u) s
 
-makeLogicLHName :: Symbol -> GHC.Module -> Maybe GHC.Name -> LHName
-makeLogicLHName s m r = LHNResolved (LHRLogic (LogicName s m r)) s
+makeLogicLHName :: LHUniqueM m => Symbol -> GHC.Module -> Maybe GHC.Name -> m LHName
+makeLogicLHName s m r = do
+  u <- freshLHUnique
+  return $ LHNResolved (LHRLogic (LogicName s (GHC.moduleName m) r u)) s
 
-makeGeneratedLogicLHName :: Symbol -> LHName
-makeGeneratedLogicLHName s = LHNResolved (LHRLogic (GeneratedLogicName s)) s
+makeGeneratedLogicLHName :: LHUniqueM m => Symbol -> m LHName
+makeGeneratedLogicLHName s = do
+  u <- freshLHUnique
+  return $ LHNResolved (LHRLogic (GeneratedLogicName s u)) s
 
 makeGHCLHNameLocated :: (GHC.NamedThing a, Symbolic a) => a -> Located LHName
 makeGHCLHNameLocated x =
@@ -344,6 +454,9 @@ makeUnresolvedLHName = LHNUnresolved
 getLHNameSymbol :: LHName -> Symbol
 getLHNameSymbol (LHNResolved _ s) = s
 getLHNameSymbol (LHNUnresolved _ s) = s
+
+instance Symbolic LHName where
+  symbol = getLHNameSymbol
 
 -- | Get the resolved Symbol from an LHName.
 getLHNameResolved :: HasCallStack => LHName -> LHResolvedName
@@ -376,9 +489,9 @@ updateLHNameSymbol f (LHNUnresolved n s) = LHNUnresolved n (f s)
 -- names must match exactly the symbol for the corresponding Haskell function.
 -- Otherwise, LH would fail to link the two at various places where it is needed.
 lhNameToResolvedSymbol :: LHName -> Symbol
-lhNameToResolvedSymbol (LHNResolved (LHRLogic (LogicName s om mReflectionOf)) _) =
-    let m = maybe om GHC.nameModule mReflectionOf
-        msymbol = Text.pack $ GHC.moduleNameString $ GHC.moduleName m
+lhNameToResolvedSymbol (LHNResolved (LHRLogic (LogicName s om mReflectionOf _)) _) =
+    let m = GHC.nameModule <$> mReflectionOf
+        msymbol = Text.pack $ GHC.moduleNameString $ maybe om GHC.moduleName m
      in symbol $ mconcat [msymbol, ".", symbolText s]
         {-
         TODO: Adding a prefix for the unit would allow LH to deal with
@@ -397,15 +510,15 @@ lhNameToResolvedSymbol (LHNResolved (LHRLogic (LogicName s om mReflectionOf)) _)
           GHC.moduleUnitId m
      in symbol $ mconcat ["u", munique, "##", msymbol, ".", symbolText s]
           -}
-lhNameToResolvedSymbol (LHNResolved (LHRLogic (GeneratedLogicName s)) _) = s
-lhNameToResolvedSymbol (LHNResolved (LHRLocal s) _) = s
+lhNameToResolvedSymbol (LHNResolved (LHRLogic (GeneratedLogicName s _)) _) = s
+lhNameToResolvedSymbol (LHNResolved (LHRLocal s _) _) = s
 lhNameToResolvedSymbol (LHNResolved (LHRGHC n) _) = symbol n
 lhNameToResolvedSymbol n = error $ "lhNameToResolvedSymbol: unexpected name: " ++ show n
 
 lhNameToUnqualifiedSymbol :: HasCallStack => LHName -> Symbol
-lhNameToUnqualifiedSymbol (LHNResolved (LHRLogic (LogicName s _ _)) _) = s
-lhNameToUnqualifiedSymbol (LHNResolved (LHRLogic (GeneratedLogicName s)) _) = s
-lhNameToUnqualifiedSymbol (LHNResolved (LHRLocal s) _) = s
+lhNameToUnqualifiedSymbol (LHNResolved (LHRLogic (LogicName s _ _ _)) _) = s
+lhNameToUnqualifiedSymbol (LHNResolved (LHRLogic (GeneratedLogicName s _)) _) = s
+lhNameToUnqualifiedSymbol (LHNResolved (LHRLocal s _) _) = s
 lhNameToUnqualifiedSymbol (LHNResolved (LHRGHC n) _) = symbol $ GHC.getOccString n
 lhNameToUnqualifiedSymbol n = error $ "lhNameToUnqualifiedSymbol: unexpected name: " ++ show n
 
@@ -421,8 +534,9 @@ reflectGHCName thisModule n =
       (LHRLogic
         (LogicName
           (symbol (GHC.occNameString $ GHC.nameOccName n))
-          thisModule
+          (GHC.moduleName thisModule)
           (Just n)
+          (getLHUnique n)
         )
       )
       (symbol n)
@@ -431,7 +545,7 @@ isNonReflectedLogicName :: LHName -> Bool
 isNonReflectedLogicName lhname = isResolvedLogicName lhname && (isNothing . maybeReflectedLHName) lhname
 
 maybeReflectedLHName :: LHName -> Maybe GHC.Name
-maybeReflectedLHName (LHNResolved (LHRLogic (LogicName _ _ m)) _) = m
+maybeReflectedLHName (LHNResolved (LHRLogic (LogicName _ _ m _)) _) = m
 maybeReflectedLHName _ = Nothing
 
 isResolvedLogicName :: LHName -> Bool
@@ -439,9 +553,9 @@ isResolvedLogicName (LHNResolved (LHRLogic (LogicName {})) _) = True
 isResolvedLogicName _ = False
 
 isGeneratedLogicName :: LHName -> Bool
-isGeneratedLogicName (LHNResolved (LHRLogic (GeneratedLogicName _)) _) = True
+isGeneratedLogicName (LHNResolved (LHRLogic (GeneratedLogicName _ _)) _) = True
 isGeneratedLogicName _ = False
 
-logicNameOriginModule :: LHName -> GHC.Module
-logicNameOriginModule (LHNResolved (LHRLogic (LogicName _ m _)) _) = m
+logicNameOriginModule :: LHName -> GHC.ModuleName
+logicNameOriginModule (LHNResolved (LHRLogic (LogicName _ m _ _)) _) = m
 logicNameOriginModule n = error $ "logicNameOriginModule: Not a logic name " ++ show n

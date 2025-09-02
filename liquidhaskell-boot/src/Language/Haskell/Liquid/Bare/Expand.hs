@@ -498,7 +498,7 @@ cookSpecType :: Bare.Env -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> Loc
              -> LocSpecType
 cookSpecType env sigEnv name x bt =
   either Ex.throw id $
-  cookSpecTypeE env sigEnv name x bt
+  Bare.runLookupFIXME $ cookSpecTypeE env sigEnv name x bt
   where
     _msg = "cookSpecType: " ++ GM.showPpr (z, Ghc.varType <$> z)
     z    = Bare.plugSrc x
@@ -561,10 +561,7 @@ specExpandType :: BareRTEnv -> LocSpecType -> LocSpecType
 specExpandType = expandLoc
 
 bareSpecType :: Bare.Env -> LocBareType -> Bare.Lookup LocSpecType
-bareSpecType env bt =
-  case Bare.ofBareTypeE env (F.loc bt) Nothing (val bt) of
-    Left e  -> Left e
-    Right t -> Right (F.atLoc bt t)
+bareSpecType env bt = F.atLoc bt <$> Bare.ofBareTypeE env (F.loc bt) Nothing (val bt)
 
 maybePlug :: Bool -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> LocSpecType -> LocSpecType
 maybePlug allowTC sigEnv name kx =

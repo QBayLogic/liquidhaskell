@@ -226,7 +226,10 @@ import GHC.Builtin.Types.Prim         as Ghc
     , primTyCons
     )
 import GHC.Builtin.Utils              as Ghc
-    ( isNumericClass )
+    ( isNumericClass
+    , isKnownKeyName
+    , lookupKnownKeyName
+    )
 import GHC.Core                       as Ghc
     ( Alt(Alt)
     , AltCon(DEFAULT, DataAlt, LitAlt)
@@ -750,7 +753,7 @@ import GHC.Types.TypeEnv              as Ghc
     , plusTypeEnv
     )
 import GHC.Types.Unique               as Ghc
-    ( getKey, mkUnique )
+    ( getKey, mkUnique, unpkUnique )
 import GHC.Types.Unique.Set           as Ghc (mkUniqSet)
 import GHC.Types.Unique.Supply        as Ghc
     ( MonadUnique, getUniqueM )
@@ -796,7 +799,7 @@ import GHC.Unit.Module                as Ghc
     , ModuleNameWithIsBoot
     , UnitId
     , lookupModuleEnv
-    , stableModuleCmp
+    , stableModuleNameCmp
     , fsToUnit
     , mkModuleNameFS
     , moduleEnvKeys

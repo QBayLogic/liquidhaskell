@@ -147,7 +147,7 @@ makeClasses env sigEnv myName specs = do
     classTcs = [ (name, cls, tc) | (name, spec) <- M.toList specs
                                  , cls          <- Ms.classes spec
                                  , tc           <- Mb.maybeToList (classTc cls) ]
-    classTc = either (const Nothing) Just . Bare.lookupGhcTyConLHName (reTyLookupEnv env) . btc_tc . rcName
+    classTc = Just . Bare.lookupGhcTyConLHName (reTyLookupEnv env) . btc_tc . rcName
 
 mkClass :: Bare.Env -> Bare.SigEnv -> ModName -> ModName -> RClass LocBareType -> Ghc.TyCon
         -> Bare.Lookup (Maybe (DataConP, [(ModName, Ghc.Var, LocSpecType)]))
@@ -186,7 +186,7 @@ makeMethod :: Bare.Env -> Bare.SigEnv -> ModName -> (Located LHName, LocBareType
            -> Bare.Lookup (ModName, PlugTV Ghc.Var, LocSpecType)
 makeMethod env sigEnv name (lx, bt) = (name, mbV,) <$> Bare.cookSpecTypeE env sigEnv name mbV bt
   where
-    mbV = either (const Bare.GenTV) Bare.LqTV (Bare.lookupGhcIdLHName env lx)
+    mbV = Bare.LqTV (Bare.lookupGhcIdLHName env lx)
 
 -------------------------------------------------------------------------------
 makeSpecDictionaries
@@ -242,27 +242,21 @@ resolveDictionaries env = map $ \ri ->
     let !v = lookupDFun ri
      in (v, M.fromList $ first (getLHNameSymbol . val) <$> risigs ri)
   where
-    lookupDFun (RI c (Just ldict) _ _) = do
-       case Bare.lookupGhcIdLHName env ldict of
-         Left e ->
-           panic (Just $ GM.fSrcSpan $ btc_tc c) $
-             "cannot find dictionary from name: " ++ show e
-         Right v -> v
+    lookupDFun (RI _ (Just ldict) _ _) = do
+      Bare.lookupGhcIdLHName env ldict
     lookupDFun (RI c _ ts _) = do
        let tys = map (toType False . dropUniv . val) ts
-       case Bare.lookupGhcTyConLHName (reTyLookupEnv env) (btc_tc c) of
-         Left _ ->
-           panic (Just $ GM.fSrcSpan $ btc_tc c) "cannot find type class"
-         Right tc -> case Ghc.tyConClass_maybe tc of
-           Nothing ->
-             panic (Just $ GM.fSrcSpan $ btc_tc c) "type constructor does not refer to a type class"
-           Just cls ->
-             case Ghc.lookupInstEnv False (Bare.reInstEnvs env) cls tys of
-               -- Is it ok to pick the first match?
-               ((clsInst, _) : _, _, _) ->
-                 Ghc.is_dfun clsInst
-               ([], _, _) ->
-                 panic (Just $ GM.fSrcSpan $ btc_tc c) "cannot find class instance"
+       let tc = Bare.lookupGhcTyConLHName (reTyLookupEnv env) (btc_tc c)
+       case Ghc.tyConClass_maybe tc of
+          Nothing ->
+            panic (Just $ GM.fSrcSpan $ btc_tc c) "type constructor does not refer to a type class"
+          Just cls ->
+            case Ghc.lookupInstEnv False (Bare.reInstEnvs env) cls tys of
+              -- Is it ok to pick the first match?
+              ((clsInst, _) : _, _, _) ->
+                Ghc.is_dfun clsInst
+              ([], _, _) ->
+                panic (Just $ GM.fSrcSpan $ btc_tc c) "cannot find class instance"
 
 dropUniv :: SpecType -> SpecType
 dropUniv t = t' where (_,_,t') = bkUniv t
@@ -284,8 +278,6 @@ lookupDefaultVar env v =
         mdm <- lookup v (Ghc.classOpItems cls)
         (n, dmspec) <- mdm
         case dmspec of
-          Ghc.VanillaDM -> case lookupGhcIdLHName env (makeGHCLHNameLocated n) of
-            Right x -> Just x
-            _ -> Nothing
+          Ghc.VanillaDM -> Just $ lookupGhcIdLHName env (makeGHCLHNameLocated n)
           _ -> Nothing
       _ -> Nothing

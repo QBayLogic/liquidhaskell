@@ -116,7 +116,7 @@ lhNameToName lname = case val lname of
             (GHC.unitString $ GHC.moduleUnit m)
             (GHC.moduleNameString $ GHC.moduleName m)
             (GHC.getOccString n)
-      LHRLocal s -> symbolName s
+      LHRLocal s _ -> symbolName s
       LHRIndex i -> panic (Just $ fSrcSpan lname) $ "Cannot produce a TH Name for a LHRIndex " ++ show i
       LHRLogic _ ->
         panic (Just $ fSrcSpan lname) $ "Cannot produce a TH Name for a LogicName: " ++ show (lhNameToResolvedSymbol $ val lname)

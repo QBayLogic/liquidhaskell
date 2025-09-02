@@ -533,7 +533,7 @@ emapSpecM bscp lenv vf f sp = do
 
 emapRTAlias :: Monad m => ([F.Symbol] -> r0 -> m r1) -> RTAlias F.Symbol r0 -> m (RTAlias F.Symbol r1)
 emapRTAlias f rt = do
-    rtBody <- f (rtTArgs rt ++ rtVArgs rt) (rtBody rt)
+    rtBody <- f (rtTArgs rt ++ (F.symbol <$> rtVArgs rt)) (rtBody rt)
     return rt{rtBody}
 
 emapQualifierM :: Monad m => ([F.Symbol] -> v0 -> m v1) -> F.QualifierV v0 -> m (F.QualifierV v1)
@@ -766,7 +766,7 @@ data LiftedSpec = LiftedSpec
   , liftedBounds     :: RRBEnvV LHName LocBareTypeLHName
   , liftedAxeqs      :: HashSet (F.EquationV LHName)
     -- ^ Equalities used for Proof-By-Evaluation
-  , liftedDefines    :: HashMap F.Symbol (LMapV LHName)
+  , liftedDefines    :: HashMap LHName (LMapV LHName)
     -- ^ Logic aliases
   , liftedUsedDataCons :: HashSet LHName
     -- ^ Data constructors used in specs
@@ -988,7 +988,7 @@ toLiftedSpec a = LiftedSpec
   , liftedDsize      = dsize a
   , liftedBounds     = bounds a
   , liftedAxeqs      = S.fromList . axeqs $ a
-  , liftedDefines    = M.fromList . map (first (lhNameToResolvedSymbol . F.val)) . defines $ a
+  , liftedDefines    = M.fromList . map (first F.val) . defines $ a
   , liftedUsedDataCons = usedDataCons a
   }
 
@@ -1036,6 +1036,6 @@ unsafeFromLiftedSpec a = Spec
   , dsize      = liftedDsize  a
   , bounds     = liftedBounds a
   , axeqs      = S.toList . liftedAxeqs $ a
-  , defines    = map (first (dummyLoc . makeLocalLHName)) . M.toList . liftedDefines $ a
+  , defines    = map (first dummyLoc) . M.toList . liftedDefines $ a
   , usedDataCons = liftedUsedDataCons a
   }

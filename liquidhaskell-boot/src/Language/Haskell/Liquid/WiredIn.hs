@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskellQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
@@ -25,6 +25,8 @@ module Language.Haskell.Liquid.WiredIn
        -- * Deriving classes
        , isDerivedInstance
        , derivingClasses
+
+       , wiredInUniqueBound
        ) where
 
 import Prelude                                hiding (error)
@@ -32,7 +34,7 @@ import Prelude                                hiding (error)
 -- import Language.Fixpoint.Misc           (mapSnd)
 import Language.Haskell.Liquid.GHC.Misc
 import qualified Liquid.GHC.API as Ghc
-import Liquid.GHC.API (Var, Arity, TyVar, Bind(..), Boxity(..), Expr(..), ForAllTyFlag(Required))
+import Liquid.GHC.API (Var, TyVar, Bind(..), Boxity(..), Expr(..), ForAllTyFlag(Required))
 import Language.Haskell.Liquid.Types.Errors
 import Language.Haskell.Liquid.Types.Names
 import Language.Haskell.Liquid.Types.RType
@@ -40,17 +42,20 @@ import Language.Haskell.Liquid.Types.Types
 import Language.Haskell.Liquid.Types.RefType
 import Language.Haskell.Liquid.Types.Variance
 import Language.Haskell.Liquid.Types.PredType
+import Language.Haskell.Liquid.WiredIn.TH
 
 -- import Language.Fixpoint.Types hiding (panic)
 import qualified Language.Fixpoint.Types.Config as F
 import qualified Language.Fixpoint.Smt.Theories as F
 import qualified Language.Fixpoint.Types as F
-import           Data.Bifunctor (first)
 import qualified Data.HashSet as S
 import           Data.Maybe
 import           Data.Proxy
+import           Language.Haskell.TH (listE, tupE)
+import           Language.Haskell.TH.Syntax (lift)
 
 import Language.Haskell.Liquid.GHC.TypeRep ()
+import Data.Word (Word64)
 
 -- | Horrible hack to support hardwired symbols like
 --      `head`, `tail`, `fst`, `snd`
@@ -162,9 +167,6 @@ proofTyConName = "Proof"
 -- | Predicate Types for WiredIns ----------------------------------------------
 --------------------------------------------------------------------------------
 
-maxArity :: Arity
-maxArity = 7
-
 wiredTyCons :: [TyConP]
 wiredTyCons  = fst wiredTyDataCons
 
@@ -174,10 +176,10 @@ wiredDataCons = snd wiredTyDataCons
 wiredTyDataCons :: ([TyConP] , [Located DataConP])
 wiredTyDataCons = (concat tcs, dummyLoc <$> concat dcs)
   where
-    (tcs, dcs)  = unzip $ listTyDataCons : map tupleTyDataCons [2..maxArity]
+    (tcs, dcs)  = unzip $ listTyDataCons : map tupleTyDataCons tupleNames
 
 charDataCon :: Located DataConP
-charDataCon = dummyLoc (DataConP l0 Ghc.charDataCon  [] [] [] [(makeGeneratedLogicLHName "charX",lt)] lt False wiredInName l0)
+charDataCon = dummyLoc (DataConP l0 Ghc.charDataCon  [] [] [] [($(logic "charX"),lt)] lt False wiredInName l0)
   where
     l0 = F.dummyPos "LH.Bare.charTyDataCons"
     c  = Ghc.charTyCon
@@ -193,22 +195,32 @@ listTyDataCons   = ( [TyConP l0 c [RTV tyv] [p] [Covariant] [Covariant] (Just fs
       [tyv]      = tyConTyVarsDef c
       t          = rVar tyv :: RSort
       fld        = "fldList"
-      xHead      = "head"
-      xTail      = "tail"
+      xHead      = $(logic "head")
+      xTail      = $(logic "tail")
       p          = PV "p" t (F.vv Nothing) [(t, fld, F.EVar fld)]
-      px         = pdVarReft $ PV "p" t (F.vv Nothing) [(t, fld, F.EVar xHead)]
+      px         = pdVarReft $ PV "p" t (F.vv Nothing) [(t, fld, F.EVar (F.symbol xHead))]
       lt         = rApp c [xt] [rPropP [] $ pdVarReft p] mempty
       xt         = rVar tyv
       xst        = rApp c [RVar (RTV tyv) px] [rPropP [] $ pdVarReft p] mempty
-      cargs      = map (first makeGeneratedLogicLHName) [(xTail, xst), (xHead, xt)]
+      cargs      = [(xTail, xst), (xHead, xt)]
       fsize      = SymSizeFun (dummyLoc "GHC.Types_LHAssumptions.len")
 
 wiredInName :: F.Symbol
 wiredInName = "WiredIn"
 
-tupleTyDataCons :: Int -> ([TyConP] , [DataConP])
-tupleTyDataCons n = ( [TyConP   l0 c  (RTV <$> tyvs) ps tyvarinfo pdvarinfo Nothing]
-                    , [DataConP l0 dc (RTV <$> tyvs) ps []  cargs  lt False wiredInName l0])
+tupleNames :: [(Int, [LHName], [LHName])]
+tupleNames =
+  $(listE $ flip map [2..maxArity] $ \n ->
+    let xs = map (logic . F.symbol . ("x_Tuple"   <>) . show) [1..n]
+        fs = map (logic . F.symbol . ("fld_Tuple" <>) . show) [2..n]
+        ln = lift n
+     in tupE [ln, listE xs, listE fs]
+  )
+
+tupleTyDataCons :: (Int, [LHName], [LHName]) -> ([TyConP] , [DataConP])
+tupleTyDataCons (n, ~(x1:xs), flds)
+  = ( [TyConP   l0 c  (RTV <$> tyvs) ps tyvarinfo pdvarinfo Nothing]
+    , [DataConP l0 dc (RTV <$> tyvs) ps []  cargs  lt False wiredInName l0])
   where
     tyvarinfo     = replicate n     Covariant
     pdvarinfo     = replicate (n-1) Covariant
@@ -217,17 +229,14 @@ tupleTyDataCons n = ( [TyConP   l0 c  (RTV <$> tyvs) ps tyvarinfo pdvarinfo Noth
     dc            = Ghc.tupleDataCon Boxed n
     tyvs@(tv:tvs) = tyConTyVarsDef c
     (ta:ts)       = (rVar <$> tyvs) :: [RSort]
-    flds          = mks "fld_Tuple"
     fld           = "fld_Tuple"
-    x1:xs         = mks ("x_Tuple" ++ show n)
-    ps            = mkps pnames (ta:ts) ((fld, F.EVar fld) : zip flds (F.EVar <$> flds))
+    ps            = mkps pnames (ta:ts) ((fld, F.EVar fld) : zip (F.symbol <$> flds) (F.EVar . F.symbol <$> flds))
     ups           = uPVar <$> ps
-    pxs           = mkps pnames (ta:ts) ((fld, F.EVar x1) : zip flds (F.EVar <$> xs))
+    pxs           = mkps pnames (ta:ts) ((fld, F.EVar $ F.symbol x1) : zip (F.symbol <$> flds) (F.EVar . F.symbol <$> xs))
     lt            = rApp c (rVar <$> tyvs) (rPropP [] . pdVarReft <$> ups) mempty
     xts           = zipWith (\v p -> RVar (RTV v) (pdVarReft p)) tvs pxs
-    cargs         = map (first makeGeneratedLogicLHName) $ reverse $ (x1, rVar tv) : zip xs xts
+    cargs         = reverse $ (x1, rVar tv) : zip xs xts
     pnames        = mks_ "p"
-    mks  x        = (\i -> F.symbol (x++ show i)) <$> [1..n]
     mks_ x        = (\i -> F.symbol (x++ show i)) <$> [2..n]
 
 
@@ -277,3 +286,6 @@ derivingClasses =
   -- , "GHC.Enum.Bounded"
   -- , "GHC.Base.Monoid"
   ]
+
+wiredInUniqueBound :: Word64
+wiredInUniqueBound = $(sealUniqueCounter >>= lift)

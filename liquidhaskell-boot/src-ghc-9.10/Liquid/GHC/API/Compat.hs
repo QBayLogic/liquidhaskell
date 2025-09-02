@@ -2,7 +2,8 @@
 -- of the GHC API. It helps encapsulating differences between branches of LH
 -- that could support different versions of GHC.
 module Liquid.GHC.API.Compat (
-    UniqueId
+    UniqueClass
+  , UniqueId
   , toUniqueId
 
   , foldableModule
@@ -21,11 +22,11 @@ import GHC.Hs
 -- Uniques
 ----------------------
 
+type UniqueClass = Char
 type UniqueId = Word64
 
 toUniqueId :: Word64 -> UniqueId
 toUniqueId = id
-
 
 ----------------------
 -- Built-in modules

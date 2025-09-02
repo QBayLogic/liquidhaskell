@@ -10,6 +10,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE ConstraintKinds            #-}
 {-# LANGUAGE NamedFieldPuns             #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
@@ -36,7 +37,8 @@ module Language.Haskell.Liquid.Types.Types (
   , F.isDummy
 
   -- * Refinement Types
-  , RTAlias (..)
+  , RTAliasB (..)
+  , RTAlias
   , lmapEAlias
 
   -- * Classes describing operations on `RTypes`
@@ -130,7 +132,7 @@ module Language.Haskell.Liquid.Types.Types (
   , mapRTAVars
 
   -- * CoreToLogic
-  , LogicMap(..), toLMapV, mkLogicMap, toLogicMap, eAppWithMap, emapLMapM, LMapV(..), LMap
+  , LogicMapBV(..), LogicMap, toLMapV, mkLogicMap, toLogicMap, eAppWithMap, emapLMapM, LMapBV(..), LMapV, LMap
 
   -- * Refined Instances
   , RDEnv, DEnv(..), RInstance(..), RISig(..)
@@ -251,28 +253,32 @@ class SubsTy tv ty a where
 -- Ideally, this bandaid should be replaced so we don't have these
 -- hacky corner cases.
 
-data LogicMap = LM
-  { lmSymDefs  :: M.HashMap Symbol LMap        -- ^ Map from symbols to equations they define
-  , lmVarSyms  :: M.HashMap Var (Maybe Symbol) -- ^ Map from (lifted) Vars to `Symbol`; see:
-                                              --   NOTE:LIFTED-VAR-SYMBOLS and NOTE:REFLECT-IMPORTs
-  } deriving (Show)
+data LogicMapBV b v = LM
+  { lmSymDefs  :: M.HashMap b (LMapBV b v)  -- ^ Map from symbols to equations they define
+  , lmVarSyms  :: M.HashMap Var (Maybe b)   -- ^ Map from (lifted) Vars to `Symbol`; see:
+                                            --   NOTE:LIFTED-VAR-SYMBOLS and NOTE:REFLECT-IMPORTs
+  }
+type LogicMap = LogicMapBV Symbol Symbol
 
-instance Monoid LogicMap where
+deriving instance (Show b, Ord b, Hashable b, F.Fixpoint b, Show v, Ord v, F.Fixpoint v) => Show (LogicMapBV b v)
+
+instance Eq b => Monoid (LogicMapBV b v) where
   mempty  = LM M.empty M.empty
   mappend = (<>)
 
-instance Semigroup LogicMap where
+instance Eq b => Semigroup (LogicMapBV b v) where
   LM x1 x2 <> LM y1 y2 = LM (M.union x1 y1) (M.union x2 y2)
 
-data LMapV v = LMap
-  { lmVar  :: F.LocSymbol
-  , lmArgs :: [Symbol]
-  , lmExpr :: F.ExprV v
+data LMapBV b v = LMap
+  { lmVar  :: F.Located b
+  , lmArgs :: [b]
+  , lmExpr :: F.ExprBV b v
   } deriving (Eq, Data, Generic, Functor)
-    deriving (Binary, Hashable) via Generically (LMapV v)
+    deriving (Binary, Hashable) via Generically (LMapBV b v)
+type LMapV = LMapBV F.Symbol
 type LMap = LMapV F.Symbol
 
-instance (Show v, Ord v, F.Fixpoint v) => Show (LMapV v) where
+instance (Show b, Ord b, Hashable b, F.Fixpoint b, Show v, Ord v, F.Fixpoint v) => Show (LMapBV b v) where
   show (LMap x xs e) = show x ++ " " ++ show xs ++ "\t |-> \t" ++ show e
 
 toLMapV :: (F.Located LHName, ([Symbol], F.ExprV v)) -> (F.Located LHName, LMapV v)
@@ -372,15 +378,16 @@ instance Show (Axiom Var Type CoreExpr) where
 --------------------------------------------------------------------------------
 -- | Refinement Type and Expression Aliases
 --------------------------------------------------------------------------------
-data RTAlias x a = RTA
-  { rtName  :: F.Located LHName   -- ^ name of the alias with its definition's location
-  , rtTArgs :: [x]                -- ^ type parameters
-  , rtVArgs :: [Symbol]           -- ^ value parameters
+data RTAliasB b v tv a = RTA
+  { rtName  :: F.Located b        -- ^ name of the alias with its definition's location
+  , rtTArgs :: [tv]               -- ^ type parameters
+  , rtVArgs :: [v]                -- ^ value parameters
   , rtBody  :: a                  -- ^ what the alias expands to
   } deriving (Eq, Data, Generic, Functor, Foldable, Traversable)
-    deriving Hashable via Generically (RTAlias x a)
-    deriving B.Binary via Generically (RTAlias x a)
+    deriving Hashable via Generically (RTAliasB b v tv a)
+    deriving B.Binary via Generically (RTAliasB b v tv a)
 -- TODO support ghosts in aliases?
+type RTAlias tv a = RTAliasB LHName Symbol tv a
 
 -- | A map over a 'RTAlias' type parameters.
 mapRTAVars :: (a -> b) -> RTAlias a ty -> RTAlias b ty
@@ -391,8 +398,8 @@ mapRTAVars f rt = rt { rtTArgs = f <$> rtTArgs rt }
 -- Used when constructing 'Language.Haskell.Liquid.Types.Specs.GhcSpec'
 -- to include Haskell inlines and 'LogicMap' definitions in the alias
 -- environment for expansion. See [NOTE:EXPRESSION-ALIASES]
-lmapEAlias :: LMap -> RTAlias Symbol Expr
-lmapEAlias (LMap v ys e) = RTA (makeGeneratedLogicLHName <$> v) [] ys e
+lmapEAlias :: b ~ v => LMapBV b v -> RTAliasB b v Symbol (F.ExprBV b v)
+lmapEAlias (LMap v ys e) = RTA v [] ys e
 
 
 -- | The type used during constraint generation, used

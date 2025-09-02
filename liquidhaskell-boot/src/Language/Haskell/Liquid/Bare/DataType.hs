@@ -22,7 +22,7 @@ module Language.Haskell.Liquid.Bare.DataType
   ) where
 
 import qualified Control.Exception                      as Ex
-import           Control.Monad (forM, unless)
+import           Control.Monad (forM, unless, zipWithM)
 import           Control.Monad.Reader
 import qualified Data.List                              as L
 import qualified Data.HashMap.Strict                    as M
@@ -453,19 +453,20 @@ makeSizeCtor (s,xs) d = d {dcFields = fmap (mapBot go) <$> dcFields d}
 
 
 catLookups :: [Bare.Lookup a] -> Bare.Lookup [a]
-catLookups = sequence . Mb.mapMaybe skipResolve
+catLookups = fmap Mb.catMaybes . traverse skipResolve
 
-skipResolve  :: Bare.Lookup a -> Maybe (Bare.Lookup a)
-skipResolve (Left es) = left' (filter (not . isErrResolve) es)
-skipResolve (Right v) = Just (Right v)
+skipResolve  :: Bare.Lookup a -> Bare.Lookup (Maybe a)
+skipResolve = Bare.handleL h . fmap Just
+  where
+    h es = left' (filter (not . isErrResolve) es)
 
 isErrResolve :: TError t -> Bool
 isErrResolve ErrResolve {} = True
 isErrResolve _             =  False
 
-left' :: [e] -> Maybe (Either [e] a)
-left' [] = Nothing
-left' es = Just (Left es)
+left' :: [Error] -> Bare.Lookup (Maybe a)
+left' [] = return Nothing
+left' es = Bare.throwL es
 
 
 -- | 'canonizeDecls ds' returns a subset of 'ds' with duplicates, e.g. arising
@@ -479,7 +480,7 @@ canonizeDecls env name dataDecls = do
            k <- dataDeclKey env name d
            return (fmap (, d) k)
   case Misc.uniqueByKey' selectDD (Mb.catMaybes kds) of
-    Left  decls  -> Left [err decls]
+    Left  decls  -> Bare.throwL [err decls]
     Right decls  -> return decls
             -- [ (k, d) | d <- ds, k <- rights [dataDeclKey env name d] ]
   -- case Misc.uniqueByKey' selectDD kds of
@@ -529,13 +530,13 @@ checkDataCtors  env  name  c  dd (Just cons) = do
     then do
       cons' <- mapM checkDataCtorDupField cons
       checkDataCtorFieldTypes cons'
-    else Left [errDataConMismatch (getLHNameSymbol <$> dataNameSymbol (tycName dd)) dcs rdcs]
+    else Bare.throwL [errDataConMismatch (getLHNameSymbol <$> dataNameSymbol (tycName dd)) dcs rdcs]
 
 -- | Checks whether the given data constructor has duplicate fields.
 --
 checkDataCtorDupField :: DataCtor -> Bare.Lookup DataCtor
 checkDataCtorDupField d
-  | x : _ <- dups = Left [err sym x]
+  | x : _ <- dups = Bare.throwL [err sym x]
   | otherwise     = return d
     where
       sym         = dcName   d
@@ -550,7 +551,7 @@ checkDataCtorDupField d
 checkDataCtorFieldTypes :: [DataCtor] -> Bare.Lookup [DataCtor]
 checkDataCtorFieldTypes ds
   | []     <- errs = return ds
-  | e : _  <- errs = Left [e]
+  | e : _  <- errs = Bare.throwL [e]
   | otherwise      = impossible Nothing "checkDataCtorFieldTypes"
   where
     errs = [ err x xts
@@ -618,7 +619,7 @@ getDnTyCon env name dn = do
   tcMb <- Bare.lookupGhcDnTyCon env name dn
   case tcMb of
     Just tc -> return tc
-    Nothing -> Left [ ErrBadData (GM.fSrcSpan dn) (pprint dn) "Unknown Type Constructor" ]
+    Nothing -> Bare.throwL [ ErrBadData (GM.fSrcSpan dn) (pprint dn) "Unknown Type Constructor" ]
   --  ugh              = impossible Nothing "getDnTyCon"
 
 
@@ -633,7 +634,7 @@ ofBDataDecl env name (Just dd@(DataDecl tc as ps cts pos sfun pt _)) maybe_invar
   let initmap      = zip (RT.uPVar <$> πs) [0..]
   tc'             <- getDnTyCon env name tc
   cts'            <- mapM (ofBDataCtor env name lc lc' tc' αs ps πs) (Mb.fromMaybe [] cts)
-  unless (checkDataDecl tc' dd) (Left [err])
+  unless (checkDataDecl tc' dd) (Bare.throwL [err])
   let pd           = Bare.ofBareType env lc (Just []) <$> F.tracepp "ofBDataDecl-prop" pt
   let tys          = [t | dcp <- cts', (_, t) <- dcpTyArgs dcp]
   let varInfo      = L.nub $  concatMap (getPsSig initmap True) tys
@@ -647,10 +648,9 @@ ofBDataDecl env name (Just dd@(DataDecl tc as ps cts pos sfun pt _)) maybe_invar
   where
     err            = ErrBadData (GM.fSrcSpan tc) (pprint tc) "Mismatch in number of type variables"
 
-ofBDataDecl env name Nothing (Just (tc, is)) =
-  case Bare.lookupGhcTyConLHName (Bare.reTyLookupEnv env) tc of
-    Left e    -> Left e
-    Right tc' -> Right ((name, TyConP srcpos tc' [] [] tcov tcontr Nothing, Nothing), [])
+ofBDataDecl env name Nothing (Just (tc, is)) = do
+  let tc' = Bare.lookupGhcTyConLHName (Bare.reTyLookupEnv env) tc
+  return ((name, TyConP srcpos tc' [] [] tcov tcontr Nothing, Nothing), [])
   where
     (tcov, tcontr) = (is, [])
     srcpos         = F.dummyPos "LH.DataType.Variance"
@@ -671,13 +671,15 @@ ofBDataCtor :: Bare.Env
             -> Bare.Lookup DataConP
 ofBDataCtor env name l l' tc αs ps πs dc = do
   c' <- Bare.lookupGhcDataConLHName env (dcName dc)
-  return (ofBDataCtorTc env name l l' tc αs ps πs dc c')
+  ofBDataCtorTc env name l l' tc αs ps πs dc c'
 
 ofBDataCtorTc :: Bare.Env -> ModName -> F.SourcePos -> F.SourcePos ->
                  Ghc.TyCon -> [RTyVar] -> [PVar BSort] -> [PVar RSort] -> DataCtor -> Ghc.DataCon ->
-                 DataConP
-ofBDataCtorTc env name l l' tc αs ps πs _ctor@(DataCtor _c as _ xts res) c' =
-  DataConP
+                 Bare.Lookup DataConP
+ofBDataCtorTc env name l l' tc αs ps πs _ctor@(DataCtor _c as _ xts res) c' = do
+  zts <- ztsM
+  return $
+    DataConP
     { dcpLoc        = l
     , dcpCon        = c'
     , dcpFreeTyVars = RT.symbolRTyVar <$> as
@@ -696,7 +698,7 @@ ofBDataCtorTc env name l l' tc αs ps πs _ctor@(DataCtor _c as _ xts res) c' =
     _cfg          = getConfig env
     yts           = zip xs ts'
     ot            = t0'
-    zts           = zipWith (normalizeField c') [1..] (reverse yts)
+    ztsM          = zipWithM (normalizeField c') [1..] (reverse yts)
     usedTvs       = S.fromList (ty_var_value <$> concatMap RT.freeTyVars (t0':ts'))
     cs            = [ p | p <- RT.ofType <$> Ghc.dataConTheta c', keepPredType usedTvs p ]
     (xs, ts)      = unzip xts
@@ -769,10 +771,10 @@ eqSubst (RApp c [_, _, RVar a _, t] _ _)
   | rtc_tc c == Ghc.eqPrimTyCon = Just (a, t)
 eqSubst _                       = Nothing
 
-normalizeField :: Ghc.DataCon -> Int -> (LHName, a) -> (LHName, a)
+normalizeField :: Ghc.DataCon -> Int -> (LHName, a) -> Bare.Lookup (LHName, a)
 normalizeField c i (x, t)
-  | isTmp x   = (xi, t)
-  | otherwise = (x , t)
+  | isTmp x   = do n <- xi; return (n, t)
+  | otherwise = return (x , t)
   where
     isTmp     = F.isPrefixOfSym F.tempPrefix . lhNameToUnqualifiedSymbol
     xi        = makeGeneratedLogicLHName (makeDataConSelector Nothing c i)

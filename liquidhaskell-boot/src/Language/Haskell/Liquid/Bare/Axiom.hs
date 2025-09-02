@@ -122,12 +122,8 @@ makeAssumeReflectAxiom sig env tce (actual, pretended) =
     at = val $ strengthenSpecWithMeasure sig env actualV pretended{val=qPretended}
 
     -- Get the Ghc.Var's of the actual and pretended function names
-    actualV = case Bare.lookupGhcIdLHName env actual of
-      Right x -> x
-      Left _ -> panic (Just $ GM.fSrcSpan actual) "function to reflect not in scope"
-    pretendedV = case Bare.lookupGhcIdLHName env pretended of
-      Right x -> x
-      Left _ -> panic (Just $ GM.fSrcSpan pretended) "function to reflect not in scope"
+    actualV = Bare.lookupGhcIdLHName env actual
+    pretendedV = Bare.lookupGhcIdLHName env pretended
     -- Get the qualified name symbols for the actual and pretended functions
     lhNameToSymbol lx =
       F.symbol $
@@ -283,8 +279,7 @@ findVarDefType cbs sigs env _defs (Left x) =
   Just (v, e) ->
     Just (fmap getLHNameSymbol x, val <$> lookup v sigs, v, e)
   Nothing     -> do
-    let ecall = panic (Just $ GM.fSrcSpan x) "function to reflect not found"
-        var = either ecall id (Bare.lookupGhcIdLHName env x)
+    let var = Bare.lookupGhcIdLHName env x
         info = Ghc.idInfo var
         unfolding = getExprFromUnfolding . Ghc.realUnfoldingInfo $ info
     case unfolding of

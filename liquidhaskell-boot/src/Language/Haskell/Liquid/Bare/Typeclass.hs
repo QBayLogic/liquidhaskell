@@ -81,7 +81,7 @@ compileClasses src env (name, spec) rest =
     Just (cls, sig) -> (M.alter (merge sig) cls refs, sigs')
    where
     clsOp = do
-      var <- either (const Nothing) Just $ Bare.lookupGhcIdLHName env lsym
+      let var = Bare.lookupGhcIdLHName env lsym
       cls <- Ghc.isClassOpId_maybe var
       pure (cls, (var, ref))
     merge sig v = case v of
@@ -121,8 +121,8 @@ compileClasses src env (name, spec) rest =
       ++ concatMap (Mb.mapMaybe resolveClassMaybe . dataDecls . snd) rest
   resolveClassMaybe :: DataDecl -> Maybe Ghc.Class
   resolveClassMaybe d =
-    either (const Nothing) Just (Bare.lookupGhcTyConLHName (Bare.reTyLookupEnv env) $ dataNameSymbol $ tycName d)
-      >>= Ghc.tyConClass_maybe
+    Ghc.tyConClass_maybe $
+      Bare.lookupGhcTyConLHName (Bare.reTyLookupEnv env) $ dataNameSymbol $ tycName d
 
 
 -- a list of class with user defined refinements

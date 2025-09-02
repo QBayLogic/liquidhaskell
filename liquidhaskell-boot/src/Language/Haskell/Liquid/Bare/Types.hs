@@ -27,7 +27,7 @@ module Language.Haskell.Liquid.Bare.Types
   , plugSrc
   , varRSort
   , varSortedReft
-  , failMaybe
+  , isTargetModName
   ) where
 
 import qualified Text.PrettyPrint.HughesPJ             as PJ
@@ -185,16 +185,6 @@ varSortedReft emb = RT.rTypeSortedReft emb . varRSort
 
 varRSort  :: Ghc.Var -> RSort
 varRSort  = RT.ofType . Ghc.varType
-
--------------------------------------------------------------------------------
--- | Handling failed resolution
--------------------------------------------------------------------------------
-failMaybe :: Env -> ModName -> Either e r -> Either e (Maybe r)
-failMaybe env name res = case res of
-  Right r -> Right (Just r)
-  Left  e -> if isTargetModName env name
-              then Left e
-              else Right Nothing
 
 isTargetModName :: Env -> ModName -> Bool
 isTargetModName env name = name == _giTargetMod (reSrc env)

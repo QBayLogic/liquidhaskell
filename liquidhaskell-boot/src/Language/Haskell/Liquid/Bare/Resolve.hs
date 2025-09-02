@@ -10,6 +10,7 @@
 {-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE InstanceSigs          #-}
 
 module Language.Haskell.Liquid.Bare.Resolve
   ( -- * Creating the Environment
@@ -20,6 +21,10 @@ module Language.Haskell.Liquid.Bare.Resolve
 
     -- * Resolving symbols
   , Lookup
+  , runLookupFIXME
+  , throwL
+  , catchL
+  , handleL
 
   -- * Looking up names
   , lookupGhcDataConLHName
@@ -36,6 +41,7 @@ module Language.Haskell.Liquid.Bare.Resolve
   -- * Misc
   , coSubRReft
   , unQualifySymbol
+  , failMaybe
 
   -- * Conversions from Bare
   , ofBareTypeE
@@ -52,13 +58,18 @@ module Language.Haskell.Liquid.Bare.Resolve
   ) where
 
 import qualified Control.Exception                 as Ex
+import           Control.Monad.Trans.Except (ExceptT(..), runExceptT, catchE)
+import           Control.Monad.State.Strict (StateT(..), evalStateT, get, put)
+import           Control.Monad.Trans (lift)
 import           Data.Bifunctor (first)
 import           Data.Function (on)
+import           Data.Functor.Identity (Identity(..))
 import           Data.IORef (newIORef)
 import qualified Data.List                         as L
 import qualified Data.HashSet                      as S
 import qualified Data.Maybe                        as Mb
 import qualified Data.HashMap.Strict               as M
+import           Data.Word (Word64)
 import           GHC.Stack
 import qualified Text.PrettyPrint.HughesPJ         as PJ
 
@@ -85,8 +96,43 @@ import           System.IO.Unsafe (unsafePerformIO)
 myTracepp :: (F.PPrint a) => String -> a -> a
 myTracepp = F.notracepp
 
--- type Lookup a = Misc.Validate [Error] a
-type Lookup a = Either [Error] a
+newtype LookupT m a =
+  LookupT
+    { runLookupT :: ExceptT [Error] (StateT Word64 m) a
+    }
+
+type Lookup a = LookupT Identity a
+
+instance Functor m => Functor (LookupT m) where
+  fmap f = LookupT . fmap f . runLookupT
+
+instance Monad m => Applicative (LookupT m) where
+  pure = LookupT . pure
+  f <*> x = LookupT $ runLookupT f <*> runLookupT x
+
+instance Monad m => Monad (LookupT m) where
+  x >>= f = LookupT $ runLookupT x >>= (runLookupT . f)
+
+instance Monad m => LHUniqueM (LookupT m) where
+  freshLHUnique :: Monad m => LookupT m LHUnique
+  freshLHUnique = LookupT $ do
+    u <- lift get
+    put (u + 1)
+    return $ LHUnique u
+
+-- | Almost certainly wrong! Purely generated unique values will overlap if
+-- actually used.
+runLookupFIXME :: Lookup a -> Either [Error] a
+runLookupFIXME = runIdentity . flip evalStateT 0 . runExceptT . runLookupT
+
+throwL :: Monad m => [Error] -> LookupT m a
+throwL es = LookupT $ ExceptT $ pure $ Left es
+
+catchL :: Monad m => LookupT m a -> ([Error] -> LookupT m a) -> LookupT m a
+catchL m h = LookupT $ catchE (runLookupT m) (runLookupT . h)
+
+handleL :: Monad m => ([Error] -> LookupT m a) -> LookupT m a -> LookupT m a
+handleL = flip catchL
 
 -------------------------------------------------------------------------------
 -- | Creating an environment
@@ -232,23 +278,23 @@ lookupGhcDnTyConE env (DnCon  lname)
 lookupGhcDnTyConE env (DnName lname)
   = do
    case lookupTyThing (reTyLookupEnv env) lname of
-     Ghc.ATyCon tc -> Right tc
-     Ghc.AConLike (Ghc.RealDataCon d) -> Right $ Ghc.dataConTyCon d
+     Ghc.ATyCon tc -> return tc
+     Ghc.AConLike (Ghc.RealDataCon d) -> return $ Ghc.dataConTyCon d
      _ -> panic
            (Just $ GM.fSrcSpan lname) $ "not a type or data constructor: " ++ show (val lname)
 
 lookupGhcDataConLHName :: HasCallStack => Env -> Located LHName -> Lookup Ghc.DataCon
 lookupGhcDataConLHName env lname = do
    case lookupTyThing (reTyLookupEnv env) lname of
-     Ghc.AConLike (Ghc.RealDataCon d) -> Right d
+     Ghc.AConLike (Ghc.RealDataCon d) -> return d
      _ -> panic
            (Just $ GM.fSrcSpan lname) $ "not a data constructor: " ++ show (val lname)
 
-lookupGhcIdLHName :: HasCallStack => Env -> Located LHName -> Lookup Ghc.Id
+lookupGhcIdLHName :: HasCallStack => Env -> Located LHName -> Ghc.Id
 lookupGhcIdLHName env lname =
    case lookupTyThing (reTyLookupEnv env) lname of
-     Ghc.AConLike (Ghc.RealDataCon d) -> Right (Ghc.dataConWorkId d)
-     Ghc.AnId x -> Right x
+     Ghc.AConLike (Ghc.RealDataCon d) -> Ghc.dataConWorkId d
+     Ghc.AnId x -> x
      _ -> panic
            (Just $ GM.fSrcSpan lname) $ "not a variable or data constructor: " ++ show (val lname)
 
@@ -271,7 +317,7 @@ lookupGhcId env n =
 -------------------------------------------------------------------------------
 knownGhcType :: Env -> LocBareType -> Bool
 knownGhcType env (F.Loc l _ t) =
-  case ofBareTypeE env l Nothing t of
+  case runLookupFIXME $ ofBareTypeE env l Nothing t of
     Left e  -> myTracepp ("knownType: " ++ F.showpp (t, e)) False
     Right _ -> True
 
@@ -303,7 +349,7 @@ errResolve k msg lx = ErrResolve (GM.fSrcSpan lx) k (F.pprint (F.val lx)) (PJ.te
 -- | @ofBareType@ and @ofBareTypeE@ should be the _only_ @SpecType@ constructors
 -------------------------------------------------------------------------------
 ofBareType :: HasCallStack => Env -> F.SourcePos -> Maybe [PVar BSort] -> BareType -> SpecType
-ofBareType env l ps t = either fail' id (ofBareTypeE env l ps t)
+ofBareType env l ps t = either fail' id (runLookupFIXME $ ofBareTypeE env l ps t)
   where
     fail'                  = Ex.throw
     -- fail                   = Misc.errorP "error-ofBareType" . F.showpp
@@ -334,7 +380,7 @@ coSubReft su (F.Reft (x, e)) = F.Reft (x, F.applyCoSub su e)
 
 
 ofBSort :: HasCallStack => Env -> F.SourcePos -> BSort -> RSort
-ofBSort env l t = either (Misc.errorP "error-ofBSort" . F.showpp) id (ofBSortE env l t)
+ofBSort env l t = either (Misc.errorP "error-ofBSort" . F.showpp) id (runLookupFIXME $ ofBSortE env l t)
 
 ofBSortE :: HasCallStack => Env -> F.SourcePos -> BSort -> Lookup RSort
 ofBSortE env l t = ofBRType env (const id) l t
@@ -397,16 +443,16 @@ ofBRType env f l = go []
     goRef bs (RProp ss (RHole r)) = rPropP <$> mapM goSyms ss <*> goReft bs r
     goRef bs (RProp ss t)         = RProp  <$> mapM goSyms ss <*> go bs t
     goSyms (x, t)                 = (x,) <$> ofBSortE env l t
-    goRApp bs tc ts rs r          = bareTCApp <$> goReft bs r <*> lc' <*> mapM (goRef bs) rs <*> mapM (go bs) ts
+    goRApp bs tc ts rs r          = bareTCApp <$> goReft bs r <*> pure lc' <*> mapM (goRef bs) rs <*> mapM (go bs) ts
       where
-        lc'                    = F.atLoc lc <$> lookupGhcTyConLHName (reTyLookupEnv env) lc
+        lc'                    = F.atLoc lc $ lookupGhcTyConLHName (reTyLookupEnv env) lc
         lc                     = btc_tc tc
 
-lookupGhcTyConLHName :: HasCallStack => GHCTyLookupEnv -> Located LHName -> Lookup Ghc.TyCon
+lookupGhcTyConLHName :: HasCallStack => GHCTyLookupEnv -> Located LHName -> Ghc.TyCon
 lookupGhcTyConLHName env lc = do
     case lookupTyThing env lc of
-      Ghc.ATyCon tc -> Right tc
-      Ghc.AConLike (Ghc.RealDataCon dc) -> Right $ Ghc.promoteDataCon dc
+      Ghc.ATyCon tc -> tc
+      Ghc.AConLike (Ghc.RealDataCon dc) -> Ghc.promoteDataCon dc
       _ -> panic
             (Just $ GM.fSrcSpan lc) $ "not a type constructor: " ++ show (val lc)
 
@@ -421,7 +467,7 @@ lookupTyThingMaybe env lc@(Loc _ _ c0) = unsafePerformIO $ do
     case c0 of
       LHNUnresolved _ _ -> panic (Just $ GM.fSrcSpan lc) $ "unresolved name: " ++ show c0
       LHNResolved rn _ -> case rn of
-        LHRLocal _ -> panic (Just $ GM.fSrcSpan lc) $ "cannot resolve a local name: " ++ show c0
+        LHRLocal _ _ -> panic (Just $ GM.fSrcSpan lc) $ "cannot resolve a local name: " ++ show c0
         LHRIndex i -> panic (Just $ GM.fSrcSpan lc) $ "cannot resolve a LHRIndex " ++ show i
         LHRLogic _ -> panic (Just $ GM.fSrcSpan lc) $ "lookupTyThing: cannot resolve a LHRLogic name " ++ show (lhNameToResolvedSymbol c0)
         LHRGHC n ->
@@ -597,3 +643,10 @@ type SymMap = M.HashMap F.Symbol F.Symbol
 partitionLocalBinds :: [(Ghc.Var, a)] -> ([(Ghc.Var, a)], [(Ghc.Var, a)])
 ---------------------------------------------------------------------------------
 partitionLocalBinds = L.partition (Mb.isJust . localKey . fst)
+
+failMaybe :: Env -> ModName -> Lookup a -> Lookup (Maybe a)
+failMaybe env name = handleL h . fmap Just
+  where
+    h es = if isTargetModName env name
+           then throwL es
+           else pure Nothing
