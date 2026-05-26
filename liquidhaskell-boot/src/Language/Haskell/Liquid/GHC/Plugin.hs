@@ -88,7 +88,7 @@ newtype LiquidCheckException = ErrorsOccurred [Filter] -- Unmatched expected err
 
 -- | Set to 'True' to enable debug logging.
 debugLogs :: Bool
-debugLogs = False
+debugLogs = True
 
 ---------------------------------------------------------------------------------
 -- | Useful functions -----------------------------------------------------------
@@ -537,7 +537,9 @@ processModule LiquidHaskellContext{..} = do
 
     tcg <- getGblEnv
     let localVars = Resolve.makeLocalVars preNormalizedCore
-        eBareSpec = resolveLHNames
+    eBareSpec <-
+      Resolve.runLookupFIXME $
+        resolveLHNames
           moduleCfg
           thisModule
           localVars
@@ -547,17 +549,18 @@ processModule LiquidHaskellContext{..} = do
           dependencies
     result <-
       case eBareSpec of
-        Left errors -> pure $ Left $ mkDiagnostics [] errors
-        Right (bareSpec, lnameEnv, lmap') ->
-          fmap (,bareSpec) <$>
-            makeTargetSpec
-              moduleCfg
-              localVars
-              lnameEnv
-              lmap'
-              targetSrc
-              bareSpec
-              dependencies
+        Left ds -> pure $ Left ds
+        Right (_ws, (bareSpec, lnameEnv, lmap')) ->
+          fmap (fmap (,bareSpec)) <$>
+            Resolve.runLookupFIXME $
+              makeTargetSpec
+                moduleCfg
+                localVars
+                lnameEnv
+                lmap'
+                targetSrc
+                bareSpec
+                dependencies
 
     let continue = pure $ Left (ErrorsOccurred [])
         reportErrs :: (Show e, F.PPrint e) => [TError e] -> TcRn (Either LiquidCheckException ProcessModuleResult)
@@ -568,7 +571,7 @@ processModule LiquidHaskellContext{..} = do
       Left diagnostics -> do
         liftIO $ mapM_ (printWarning logger)    (allWarnings diagnostics)
         reportErrs $ allErrors diagnostics
-      Right ((warnings, targetSpec, liftedSpec), bareSpec) -> do
+      Right ((warnings, (targetSpec, liftedSpec)), bareSpec) -> do
         liftIO $ mapM_ (printWarning logger) warnings
         let targetInfo = TargetInfo targetSrc targetSpec
 

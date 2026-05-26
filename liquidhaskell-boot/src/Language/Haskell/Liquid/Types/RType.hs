@@ -284,7 +284,7 @@ data PVarBV b v t = PV
   , ptype :: !t
   , parg  :: !b
   , pargs :: ![(t, b, F.ExprBV b v)]
-  } deriving (Generic, Data, Show, Functor)
+  } deriving (Generic, Data, Show, Functor, Foldable, Traversable)
   deriving B.Binary via Generically (PVarBV b v t)
 
 mapPVarV :: (v -> v') -> (t -> t') -> PVarBV b v t -> PVarBV b v' t'
@@ -469,7 +469,7 @@ instance CompatibleBinder Symbol BTyVar where
 -- tyVarUniqueSymbol tv = F.symbol $ show (getName tv) ++ "_" ++ show (varUnique tv)
 
 data BTyCon = BTyCon
-  { btc_tc    :: !(F.Located LHName)  -- ^ TyCon name with location information
+  { btc_tc    :: !(F.Located LHUnresolved)  -- ^ TyCon name with location information
   , btc_class :: !Bool           -- ^ Is this a class type constructor?
   , btc_prom  :: !Bool           -- ^ Is Promoted Data Con?
   }
@@ -491,7 +491,7 @@ instance NFData BTyCon
 instance NFData RTyCon
 
 
-mkBTyCon :: F.Located LHName -> BTyCon
+mkBTyCon :: F.Located LHUnresolved -> BTyCon
 mkBTyCon x = BTyCon x False False
 
 
@@ -608,28 +608,17 @@ instance TyConable F.LocSymbol where
 instance TyConable BTyCon where
   isFun b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> isFun s
-    LHNResolved (LHRGHC n) _ -> n == unrestrictedFunTyConName
-    _ -> False
 
   isList b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> isList s
-    LHNResolved (LHRGHC n) _ -> n == listTyConName
-    _ -> False
 
   isTuple b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> isTuple s
-    LHNResolved (LHRGHC n) _ -> Ghc.isTupleTyConName n
-    _ -> False
 
   isClass = isClassBTyCon
 
   ppTycon b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> ppTycon s
-    LHNResolved rn _ -> case rn of
-      LHRGHC n -> text $ showPpr n
-      LHRLocal s _ -> ppTycon s
-      LHRIndex i -> text $ "(Unknown LHRIndex " ++ show i ++ ")"
-      LHRLogic _ -> ppTycon $ lhNameToResolvedSymbol $ F.val $ btc_tc b
 
 instance Eq RTyCon where
   x == y = rtc_tc x == rtc_tc y
@@ -646,11 +635,6 @@ instance F.Fixpoint RTyCon where
 instance F.Fixpoint BTyCon where
   toFix b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> text $ F.symbolString s
-    LHNResolved rn _ -> case rn of
-      LHRGHC n -> text $ F.symbolString $ F.symbol n
-      LHRLocal s _ -> text $ F.symbolString s
-      LHRIndex i -> panic (Just $ fSrcSpan b) $ "toFix BTyCon: Unknown LHRIndex " ++ show i
-      LHRLogic _ -> text $ F.symbolString $ lhNameToResolvedSymbol $ F.val $ btc_tc b
 
 instance F.PPrint RTyCon where
   pprintTidy k c
@@ -663,11 +647,6 @@ instance F.PPrint RTyCon where
 instance F.PPrint BTyCon where
   pprintTidy _ b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> text $ F.symbolString s
-    LHNResolved rn _ -> case rn of
-      LHRGHC n -> text $ F.symbolString $ F.symbol n
-      LHRLocal s _ -> text $ F.symbolString s
-      LHRIndex i -> text $ "(Unknown LHRIndex " ++ show i ++ ")"
-      LHRLogic _ -> text $ F.symbolString $ lhNameToResolvedSymbol $ F.val $ btc_tc b
 
 instance F.PPrint v => F.PPrint (RTVar v s) where
   pprintTidy k (RTVar x _) = F.pprintTidy k x

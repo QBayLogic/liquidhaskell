@@ -179,6 +179,8 @@ import           Prelude                          hiding  (error)
 
 import           Control.DeepSeq
 import           Data.Bifunctor
+import           Data.Bifoldable
+import           Data.Bitraversable
 import           Data.Generics                          (Data)
 import qualified Data.Binary                            as B
 import           Data.Hashable
@@ -627,7 +629,7 @@ data DefV v ty ctor = Def
   , dsort   :: Maybe ty
   , binds   :: [(Symbol, Maybe ty)]    -- measure binders: the ADT argument fields
   , body    :: BodyV v
-  } deriving (Show, Data, Generic, Eq, Functor)
+  } deriving (Show, Data, Generic, Eq, Functor, Foldable, Traversable)
   deriving B.Binary via Generically (DefV v ty ctor)
   deriving Hashable via Generically (DefV v ty ctor)
 
@@ -718,6 +720,23 @@ instance Bifunctor (DefV v) where
   first f  (Def m c s bs b) = Def m c (f <$> s) (second (fmap f) <$> bs) b
   second f (Def m c s bs b) = Def m (f c) s bs b
 
+instance Bifoldable (DefV v) where
+  bifoldr f g z (Def _ c s bs _)
+    = g c
+    $ acc f s
+    $ acc (\(_, ty) -> acc f ty) bs
+    $ z
+   where
+    acc fn = flip (foldr fn)
+
+instance Bitraversable (DefV v) where
+  bitraverse f g (Def m c s bs b) =
+    Def
+      <$> pure m
+      <*> g c
+      <*> traverse f s
+      <*> traverse (bitraverse pure (traverse f)) bs
+      <*> pure b
 
 instance Bifunctor (MeasureV v) where
   first  f (M n s es k u) = M n (f s) (first f <$> es) k u

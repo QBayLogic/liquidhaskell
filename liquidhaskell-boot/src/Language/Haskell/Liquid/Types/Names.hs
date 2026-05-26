@@ -1,6 +1,7 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -29,6 +30,7 @@ module Language.Haskell.Liquid.Types.Names
   , LogicName (..)
   , LHResolvedName (..)
   , LHName (..)
+  , LHUnresolved (..)
   , LHNameSpace (..)
   , LHThisModuleNameFlag (..)
   , makeResolvedLHName
@@ -46,6 +48,7 @@ module Language.Haskell.Liquid.Types.Names
   , makeGeneratedLogicLHName
   , makeUnresolvedLHName
   , mapLHNames
+  , mapMLHNames
   , mapMLocLHNames
   , maybeReflectedLHName
   , reflectGHCName
@@ -142,8 +145,17 @@ data LHUnique
   -- rather than only a non-wired-in 'GHC.Unique' value.
   = GhcUnique {-# UNPACK #-} !GHC.UniqueClass {-# UNPACK #-} !GHC.UniqueId
   | LHUnique {-# UNPACK #-} !Word64
-  deriving (Eq, Ord, Generic, Data)
-  deriving (Hashable, B.Binary) via Generically LHUnique
+  deriving (Generic, Data)
+  deriving (B.Binary) via Generically LHUnique
+
+instance Eq LHUnique where
+  _ == _ = True
+
+instance Ord LHUnique where
+  _ `compare` _ = EQ
+
+instance Hashable LHUnique where
+  hashWithSalt salt _ = salt
 
 instance NFData LHUnique
 
@@ -164,6 +176,8 @@ instance GHC.Binary LHUnique where
       0 -> GhcUnique <$> GHC.get bh <*> GHC.get bh
       1 -> LHUnique  <$> GHC.get bh
       _ -> error "GHC.Binary: invalid tag for LHUnique"
+  put_ bh (GhcUnique c u) = GHC.putByte bh 0 >> GHC.put_ bh c >> GHC.put_ bh u
+  put_ bh (LHUnique u)    = GHC.putByte bh 1 >> GHC.put_ bh u
 
 class LHUniquable a where
   getLHUnique :: a -> LHUnique
@@ -241,37 +255,32 @@ data LHName
     = -- | In order to integrate the resolved names gradually, we keep the
       -- unresolved names.
       LHNResolved !LHResolvedName !Symbol
-    | LHNUnresolved !LHNameSpace !Symbol
   deriving (Data, Generic)
+
+data LHUnresolved
+    = LHNUnresolved !LHNameSpace !Symbol
+  deriving (Data, Generic, Eq, Ord)
+  deriving anyclass (Hashable, NFData, B.Binary)
 
 instance Lift LHName where
   liftTyped = unsafeCodeCoerce . lift
   lift (LHNResolved n s)   = [| LHNResolved $(lift n) $(lift s) |]
-  lift (LHNUnresolved _ _) = error "Cannot lift LHNUnresolved"
 
 instance LHUniquable LHName where
   getLHUnique = \case
     LHNResolved   name _ -> getLHUnique name
-    LHNUnresolved _ _    -> error "getLHUnique of LHNUnresolved"
 
 -- | An Eq instance that ignores the Symbol in resolved names
 instance Eq LHName where
   LHNResolved n0 _ == LHNResolved n1 _ = n0 == n1
-  LHNUnresolved ns0 s0 == LHNUnresolved ns1 s1 = ns0 == ns1 && s0 == s1
-  _ == _ = False
 
 -- | An Ord instance that ignores the Symbol in resolved names
 instance Ord LHName where
   compare (LHNResolved n0 _) (LHNResolved n1 _) = compare n0 n1
-  compare (LHNUnresolved ns0 s0) (LHNUnresolved ns1 s1) =
-    compare (ns0, s0) (ns1, s1)
-  compare LHNResolved{} _ = LT
-  compare LHNUnresolved{} _ = GT
 
 -- | A Hashable instance that ignores the Symbol in resolved names
 instance Hashable LHName where
   hashWithSalt s (LHNResolved n _) = hashWithSalt s n
-  hashWithSalt s (LHNUnresolved ns sym) = s `hashWithSalt` ns `hashWithSalt` sym
 
 data LHNameSpace
     = LHTcName LHThisModuleNameFlag       -- ^ Type constructors
@@ -310,6 +319,11 @@ instance Show LHName where
         showsPrec (app_prec + 1) n .
         showSpace .
         showsPrec (app_prec + 1) s
+    where
+      app_prec = 10
+
+instance Show LHUnresolved where
+  showsPrec d n0 = showParen (d > app_prec) $ case n0 of
       LHNUnresolved ns s ->
         showString "LHNUnresolved " .
         showsPrec (app_prec + 1) ns .
@@ -317,6 +331,7 @@ instance Show LHName where
         showsPrec (app_prec + 1) s
     where
       app_prec = 10
+
 
 instance Show LHResolvedName where
   showsPrec d n0 = showParen (d > app_prec) $ case n0 of
@@ -387,7 +402,7 @@ instance GHC.Binary LHResolvedName where
       _ -> error "GHC.Binary: invalid tag for LHResolvedName"
   put_ bh (LHRLogic n) = GHC.putByte bh 0 >> GHC.put_ bh n
   put_ bh (LHRGHC n) = GHC.putByte bh 1 >> GHC.put_ bh n
-  put_ bh (LHRLocal n _) = GHC.putByte bh 2 >> GHC.put_ bh (symbolString n)
+  put_ bh (LHRLocal n u) = GHC.putByte bh 2 >> GHC.put_ bh (symbolString n) >> GHC.put_ bh u
   put_ _bh (LHRIndex _n) = error "GHC.Binary: cannot serialize LHRIndex"
 
 instance GHC.Binary LogicName where
@@ -397,12 +412,12 @@ instance GHC.Binary LogicName where
       0 -> LogicName . fromString <$> GHC.get bh <*> GHC.get bh <*> GHC.get bh <*> GHC.get bh
       1 -> GeneratedLogicName <$> (fromString <$> GHC.get bh) <*> GHC.get bh
       _ -> error "GHC.Binary: invalid tag for LogicName"
-  put_ bh (LogicName s m r _) = do
+  put_ bh (LogicName s m r u) = do
     GHC.putByte bh 0
-    GHC.put_ bh (symbolString s) >> GHC.put_ bh m >> GHC.put_ bh r
-  put_ bh (GeneratedLogicName s _) = do
+    GHC.put_ bh (symbolString s) >> GHC.put_ bh m >> GHC.put_ bh r >> GHC.put_ bh u
+  put_ bh (GeneratedLogicName s u) = do
     GHC.putByte bh 1
-    GHC.put_ bh (symbolString s)
+    GHC.put_ bh (symbolString s) >> GHC.put_ bh u
 
 instance PPrint LHName where
   pprintTidy _ = pprint . getLHNameSymbol
@@ -447,13 +462,12 @@ makeGHCLHNameLocatedFromId x =
       GHC.DataConWorkId dc -> makeGHCLHNameLocated (GHC.getName dc)
       _ -> makeGHCLHNameLocated x
 
-makeUnresolvedLHName :: LHNameSpace -> Symbol -> LHName
+makeUnresolvedLHName :: LHNameSpace -> Symbol -> LHUnresolved
 makeUnresolvedLHName = LHNUnresolved
 
 -- | Get the unresolved Symbol from an LHName.
 getLHNameSymbol :: LHName -> Symbol
 getLHNameSymbol (LHNResolved _ s) = s
-getLHNameSymbol (LHNUnresolved _ s) = s
 
 instance Symbolic LHName where
   symbol = getLHNameSymbol
@@ -461,7 +475,6 @@ instance Symbolic LHName where
 -- | Get the resolved Symbol from an LHName.
 getLHNameResolved :: HasCallStack => LHName -> LHResolvedName
 getLHNameResolved (LHNResolved n _) = n
-getLHNameResolved n@LHNUnresolved{} = error $ "getLHNameResolved: unresolved name: " ++ show n
 
 getLHGHCName :: LHName -> Maybe GHC.Name
 getLHGHCName (LHNResolved (LHRGHC n) _) = Just n
@@ -473,6 +486,12 @@ mapLHNames f = go
     go :: Data a => a -> a
     go = gmapT (go `extT` f)
 
+mapMLHNames :: forall m a . (Data a, Monad m) => (LHName -> m LHName) -> a -> m a
+mapMLHNames f = go
+  where
+    go :: forall b . Data b => b -> m b
+    go = gmapM (go `extM` f)
+
 mapMLocLHNames :: forall m a. (Data a, Monad m) => (Located LHName -> m (Located LHName)) -> a -> m a
 mapMLocLHNames f = go
   where
@@ -481,7 +500,6 @@ mapMLocLHNames f = go
 
 updateLHNameSymbol :: (Symbol -> Symbol) -> LHName -> LHName
 updateLHNameSymbol f (LHNResolved n s) = LHNResolved n (f s)
-updateLHNameSymbol f (LHNUnresolved n s) = LHNUnresolved n (f s)
 
 -- | Converts resolved names to symbols.
 --

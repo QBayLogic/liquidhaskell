@@ -2,6 +2,8 @@
 --   1. MAKE a name-resolution environment,
 --   2. USE the environment to translate plain symbols into Var, TyCon, etc.
 
+{-# LANGUAGE DerivingStrategies    #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
@@ -20,11 +22,16 @@ module Language.Haskell.Liquid.Bare.Resolve
   , GHCTyLookupEnv(..)
 
     -- * Resolving symbols
+  , LookupT
   , Lookup
   , runLookupFIXME
+  , warnL
   , throwL
   , catchL
   , handleL
+  , keepGoingL
+  , keepGoingWithL
+  , checkpointL
 
   -- * Looking up names
   , lookupGhcDataConLHName
@@ -58,9 +65,9 @@ module Language.Haskell.Liquid.Bare.Resolve
   ) where
 
 import qualified Control.Exception                 as Ex
-import           Control.Monad.Trans.Except (ExceptT(..), runExceptT, catchE)
-import           Control.Monad.State.Strict (StateT(..), evalStateT, get, put)
-import           Control.Monad.Trans (lift)
+import           Control.Monad.Trans.Class (MonadTrans(..))
+import           Control.Monad.Trans.Except (ExceptT(..), runExceptT, catchE, throwE)
+import           Control.Monad.State.Strict (StateT(..), evalStateT, get, put, modify)
 import           Data.Bifunctor (first)
 import           Data.Function (on)
 import           Data.Functor.Identity (Identity(..))
@@ -98,41 +105,58 @@ myTracepp = F.notracepp
 
 newtype LookupT m a =
   LookupT
-    { runLookupT :: ExceptT [Error] (StateT Word64 m) a
+    { runLookupT :: ExceptT [Error] (StateT Diagnostics (StateT Word64 m)) a
     }
+  deriving newtype (Functor, Applicative, Monad)
 
 type Lookup a = LookupT Identity a
 
-instance Functor m => Functor (LookupT m) where
-  fmap f = LookupT . fmap f . runLookupT
-
-instance Monad m => Applicative (LookupT m) where
-  pure = LookupT . pure
-  f <*> x = LookupT $ runLookupT f <*> runLookupT x
-
-instance Monad m => Monad (LookupT m) where
-  x >>= f = LookupT $ runLookupT x >>= (runLookupT . f)
+instance MonadTrans LookupT where
+  lift = LookupT . lift . lift . lift
 
 instance Monad m => LHUniqueM (LookupT m) where
   freshLHUnique :: Monad m => LookupT m LHUnique
   freshLHUnique = LookupT $ do
-    u <- lift get
-    put (u + 1)
+    u <- lift (lift get)
+    lift (lift (put (u + 1)))
     return $ LHUnique u
 
 -- | Almost certainly wrong! Purely generated unique values will overlap if
 -- actually used.
-runLookupFIXME :: Lookup a -> Either [Error] a
-runLookupFIXME = runIdentity . flip evalStateT 0 . runExceptT . runLookupT
+runLookupFIXME :: Monad m => LookupT m a -> m (Either Diagnostics ([Warning], a))
+runLookupFIXME = fmap collect . flip evalStateT 0 . flip runStateT mempty . runExceptT . runLookupT
+  where
+    collect (Left es, ds)       = Left (mkDiagnostics [] es <> ds)
+    collect (Right a, ds)
+      | noErrors ds = Right (allWarnings ds, a)
+      | otherwise   = Left ds
+
+warnL :: Monad m => [Warning] -> LookupT m ()
+warnL ws = LookupT $ lift $ modify (<> mkDiagnostics ws [])
 
 throwL :: Monad m => [Error] -> LookupT m a
-throwL es = LookupT $ ExceptT $ pure $ Left es
+throwL es = LookupT $ throwE es
 
 catchL :: Monad m => LookupT m a -> ([Error] -> LookupT m a) -> LookupT m a
 catchL m h = LookupT $ catchE (runLookupT m) (runLookupT . h)
 
 handleL :: Monad m => ([Error] -> LookupT m a) -> LookupT m a -> LookupT m a
 handleL = flip catchL
+
+keepGoingL :: (Monad m, Monoid a) => LookupT m a -> LookupT m a
+keepGoingL = keepGoingWithL mempty
+
+keepGoingWithL :: Monad m => a -> LookupT m a -> LookupT m a
+keepGoingWithL a = handleL (\es -> LookupT $ modify (<> mkDiagnostics [] es) >> pure a)
+
+checkpointL :: Monad m => LookupT m ()
+checkpointL = LookupT $ do
+  ds <- get
+  if noErrors ds
+    then pure ()
+    else do
+      put $ mkDiagnostics (allWarnings ds) []
+      throwE $ allErrors ds
 
 -------------------------------------------------------------------------------
 -- | Creating an environment
@@ -269,10 +293,10 @@ lookupLetBoundVar localVars lx
       | otherwise = pickByLocation key [lvd0]
 
 
-lookupGhcDnTyCon :: Env -> ModName -> DataName -> Lookup (Maybe Ghc.TyCon)
+lookupGhcDnTyCon :: Monad m => Env -> ModName -> DataName -> LookupT m (Maybe Ghc.TyCon)
 lookupGhcDnTyCon env name = failMaybe env name . lookupGhcDnTyConE env
 
-lookupGhcDnTyConE :: Env -> DataName -> Lookup Ghc.TyCon
+lookupGhcDnTyConE :: Monad m => Env -> DataName -> LookupT m Ghc.TyCon
 lookupGhcDnTyConE env (DnCon  lname)
   = Ghc.dataConTyCon <$> lookupGhcDataConLHName env lname
 lookupGhcDnTyConE env (DnName lname)
@@ -283,7 +307,7 @@ lookupGhcDnTyConE env (DnName lname)
      _ -> panic
            (Just $ GM.fSrcSpan lname) $ "not a type or data constructor: " ++ show (val lname)
 
-lookupGhcDataConLHName :: HasCallStack => Env -> Located LHName -> Lookup Ghc.DataCon
+lookupGhcDataConLHName :: Monad m => HasCallStack => Env -> Located LHName -> LookupT m Ghc.DataCon
 lookupGhcDataConLHName env lname = do
    case lookupTyThing (reTyLookupEnv env) lname of
      Ghc.AConLike (Ghc.RealDataCon d) -> return d
@@ -315,13 +339,13 @@ lookupGhcId env n =
 -------------------------------------------------------------------------------
 -- | Checking existence of names
 -------------------------------------------------------------------------------
-knownGhcType :: Env -> LocBareType -> Bool
-knownGhcType env (F.Loc l _ t) =
-  case runLookupFIXME $ ofBareTypeE env l Nothing t of
-    Left e  -> myTracepp ("knownType: " ++ F.showpp (t, e)) False
-    Right _ -> True
-
-
+knownGhcType :: Monad m => Env -> LocBareType -> LookupT m Bool
+knownGhcType env (F.Loc l _ t) = succeeds $ ofBareTypeE env l Nothing t
+  where
+    succeeds lkp =
+      handleL
+        (\e -> pure $ myTracepp ("knownType: " ++ F.showpp (t, e)) False)
+        (lkp *> pure True)
 
 _rTypeTyCons :: (Ord c) => RType c tv r -> [c]
 _rTypeTyCons        = Misc.sortNub . foldRType f []
@@ -348,13 +372,10 @@ errResolve k msg lx = ErrResolve (GM.fSrcSpan lx) k (F.pprint (F.val lx)) (PJ.te
 -------------------------------------------------------------------------------
 -- | @ofBareType@ and @ofBareTypeE@ should be the _only_ @SpecType@ constructors
 -------------------------------------------------------------------------------
-ofBareType :: HasCallStack => Env -> F.SourcePos -> Maybe [PVar BSort] -> BareType -> SpecType
-ofBareType env l ps t = either fail' id (runLookupFIXME $ ofBareTypeE env l ps t)
-  where
-    fail'                  = Ex.throw
-    -- fail                   = Misc.errorP "error-ofBareType" . F.showpp
+ofBareType :: (HasCallStack, Monad m) => Env -> F.SourcePos -> Maybe [PVar BSort] -> BareType -> LookupT m SpecType
+ofBareType env l ps t = ofBareTypeE env l ps t
 
-ofBareTypeE :: HasCallStack => Env -> F.SourcePos -> Maybe [PVar BSort] -> BareType -> Lookup SpecType
+ofBareTypeE :: (HasCallStack, Monad m) => Env -> F.SourcePos -> Maybe [PVar BSort] -> BareType -> LookupT m SpecType
 ofBareTypeE env l ps t = ofBRType env (const (resolveReft l ps t)) l t
 
 resolveReft :: F.SourcePos -> Maybe [PVar BSort] -> BareType -> RReft -> RReft
@@ -379,14 +400,14 @@ coSubReft :: F.CoSub -> F.Reft -> F.Reft
 coSubReft su (F.Reft (x, e)) = F.Reft (x, F.applyCoSub su e)
 
 
-ofBSort :: HasCallStack => Env -> F.SourcePos -> BSort -> RSort
-ofBSort env l t = either (Misc.errorP "error-ofBSort" . F.showpp) id (runLookupFIXME $ ofBSortE env l t)
+ofBSort :: (HasCallStack, Monad m) => Env -> F.SourcePos -> BSort -> LookupT m RSort
+ofBSort env l t = ofBSortE env l t
 
-ofBSortE :: HasCallStack => Env -> F.SourcePos -> BSort -> Lookup RSort
+ofBSortE :: (HasCallStack, Monad m) => Env -> F.SourcePos -> BSort -> LookupT m RSort
 ofBSortE env l t = ofBRType env (const id) l t
 
-ofBPVar :: Env -> F.SourcePos -> BPVar -> RPVar
-ofBPVar env l = fmap (ofBSort env l)
+ofBPVar :: Monad m => Env -> F.SourcePos -> BPVar -> LookupT m RPVar
+ofBPVar env l = traverse (ofBSort env l)
 
 --------------------------------------------------------------------------------
 txParam :: F.SourcePos -> ((UsedPVar -> UsedPVar) -> t) -> [UsedPVar] -> RType c tv r -> t
@@ -419,8 +440,8 @@ type Expandable r = ( PPrint r
                     , SubsTy RTyVar (RType RTyCon RTyVar NoReft) r
                     , HasCallStack)
 
-ofBRType :: (Expandable r) => Env -> ([F.Symbol] -> r -> r) -> F.SourcePos -> BRType r
-         -> Lookup (RRType r)
+ofBRType :: (Expandable r, Monad m) => Env -> ([F.Symbol] -> r -> r) -> F.SourcePos -> BRType r
+         -> LookupT m (RRType r)
 ofBRType env f l = go []
   where
     goReft bs r             = return (f bs r)
@@ -432,7 +453,7 @@ ofBRType env f l = go []
     go bs (RVar a r)        = RVar (RT.bareRTyVar a) <$> goReft bs r
     go bs (RAllT a t r)     = RAllT a' <$> go bs t <*> goReft bs r
       where a'              = dropTyVarInfo (mapTyVarValue RT.bareRTyVar a)
-    go bs (RAllP a t)       = RAllP a' <$> go bs t
+    go bs (RAllP a t)       = RAllP <$> a' <*> go bs t
       where a'              = ofBPVar env l a
     go bs (RAllE x t1 t2)   = RAllE x  <$> go bs t1    <*> go bs t2
     go bs (REx x t1 t2)     = REx   x  <$> go bs t1    <*> go (x:bs) t2
@@ -644,7 +665,7 @@ partitionLocalBinds :: [(Ghc.Var, a)] -> ([(Ghc.Var, a)], [(Ghc.Var, a)])
 ---------------------------------------------------------------------------------
 partitionLocalBinds = L.partition (Mb.isJust . localKey . fst)
 
-failMaybe :: Env -> ModName -> Lookup a -> Lookup (Maybe a)
+failMaybe :: Monad m => Env -> ModName -> LookupT m a -> LookupT m (Maybe a)
 failMaybe env name = handleL h . fmap Just
   where
     h es = if isTargetModName env name

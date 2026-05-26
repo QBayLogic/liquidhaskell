@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ParallelListComp  #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections     #-}
 
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
@@ -15,6 +16,7 @@ module Language.Haskell.Liquid.Bare.Class
   where
 
 import           Data.Bifunctor
+import           Data.Bitraversable
 import qualified Data.Maybe                                 as Mb
 import qualified Data.List                                  as L
 import qualified Data.HashMap.Strict                        as M
@@ -43,7 +45,8 @@ import           Language.Haskell.Liquid.Bare.Misc         as Bare
 
 import           Text.PrettyPrint.HughesPJ (text)
 import qualified Control.Exception                 as Ex
-import Control.Monad (forM)
+import Control.Monad (forM, (<=<))
+import Control.Monad.Extra (partitionM)
 
 
 
@@ -136,8 +139,8 @@ splitDictionary = go [] []
 
 
 -------------------------------------------------------------------------------
-makeClasses :: Bare.Env -> Bare.SigEnv -> ModName -> Bare.ModSpecs
-            -> Bare.Lookup ([DataConP], [(ModName, Ghc.Var, LocSpecType)])
+makeClasses :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> Bare.ModSpecs
+            -> Bare.LookupT m ([DataConP], [(ModName, Ghc.Var, LocSpecType)])
 -------------------------------------------------------------------------------
 makeClasses env sigEnv myName specs = do
   mbZs <- forM classTcs $ \(name, cls, tc) ->
@@ -149,14 +152,14 @@ makeClasses env sigEnv myName specs = do
                                  , tc           <- Mb.maybeToList (classTc cls) ]
     classTc = Just . Bare.lookupGhcTyConLHName (reTyLookupEnv env) . btc_tc . rcName
 
-mkClass :: Bare.Env -> Bare.SigEnv -> ModName -> ModName -> RClass LocBareType -> Ghc.TyCon
-        -> Bare.Lookup (Maybe (DataConP, [(ModName, Ghc.Var, LocSpecType)]))
+mkClass :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> ModName -> RClass LocBareType -> Ghc.TyCon
+        -> Bare.LookupT m (Maybe (DataConP, [(ModName, Ghc.Var, LocSpecType)]))
 mkClass env sigEnv _myName name (RClass cc ss as ms)
   = Bare.failMaybe env name
   . mkClassE env sigEnv _myName name (RClass cc ss as ms)
 
-mkClassE :: Bare.Env -> Bare.SigEnv -> ModName -> ModName -> RClass LocBareType -> Ghc.TyCon
-         -> Bare.Lookup (DataConP, [(ModName, Ghc.Var, LocSpecType)])
+mkClassE :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> ModName -> RClass LocBareType -> Ghc.TyCon
+         -> Bare.LookupT m (DataConP, [(ModName, Ghc.Var, LocSpecType)])
 mkClassE env sigEnv _myName name (RClass cc ss as ms) tc = do
     ss'    <- mapM (mkConstr   env sigEnv name) ss
     meths  <- mapM (makeMethod env sigEnv name) ms'
@@ -175,66 +178,77 @@ mkClassE env sigEnv _myName name (RClass cc ss as ms) tc = do
     ms'    = [ (s, rFun "" (RApp cc (flip RVar mempty <$> as) [] mempty) <$> t) | (s, t) <- ms]
     rt     = rCls tc as'
 
-mkConstr :: Bare.Env -> Bare.SigEnv -> ModName -> LocBareType -> Bare.Lookup LocSpecType
+mkConstr :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> LocBareType -> Bare.LookupT m LocSpecType
 mkConstr env sigEnv name = fmap (fmap dropUniv) . Bare.cookSpecTypeE env sigEnv name Bare.GenTV
 
    --FIXME: cleanup this code
 unClass :: SpecType -> SpecType
 unClass = snd . bkClass . thrd3 . bkUniv
 
-makeMethod :: Bare.Env -> Bare.SigEnv -> ModName -> (Located LHName, LocBareType)
-           -> Bare.Lookup (ModName, PlugTV Ghc.Var, LocSpecType)
+makeMethod :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> (Located LHName, LocBareType)
+           -> Bare.LookupT m (ModName, PlugTV Ghc.Var, LocSpecType)
 makeMethod env sigEnv name (lx, bt) = (name, mbV,) <$> Bare.cookSpecTypeE env sigEnv name mbV bt
   where
     mbV = Bare.LqTV (Bare.lookupGhcIdLHName env lx)
 
 -------------------------------------------------------------------------------
 makeSpecDictionaries
-  :: Bare.Env
+  :: Monad m
+  => Bare.Env
   -> Bare.SigEnv
   -> (ModName, Ms.BareSpec)
   -> [(ModName, Ms.BareSpec)]
-  -> ([RInstance LocBareType], DEnv Ghc.Var LocSpecType)
+  -> Bare.LookupT m ([RInstance LocBareType], DEnv Ghc.Var LocSpecType)
 -------------------------------------------------------------------------------
-makeSpecDictionaries env sigEnv spec0 specs
-  = let (instances, specDicts) = makeSpecDictionary env sigEnv spec0
-     in (instances, dfromList $ specDicts ++ concatMap (snd . makeSpecDictionary env sigEnv) specs)
+makeSpecDictionaries env sigEnv spec0 specs = do
+    (instances, specDicts) <- makeSpecDictionary env sigEnv spec0
+    specsDicts <- traverse (return . snd <=< makeSpecDictionary env sigEnv) specs
+    return (instances, dfromList $ specDicts ++ concat specsDicts)
 
-makeSpecDictionary :: Bare.Env -> Bare.SigEnv -> (ModName, Ms.BareSpec)
-                   -> ([RInstance LocBareType], [(Ghc.Var, M.HashMap F.Symbol (RISig LocSpecType))])
-makeSpecDictionary env sigEnv (name, spec) =
+makeSpecDictionary :: Monad m => Bare.Env -> Bare.SigEnv -> (ModName, Ms.BareSpec)
+                   -> Bare.LookupT m ([RInstance LocBareType], [(Ghc.Var, M.HashMap F.Symbol (RISig LocSpecType))])
+makeSpecDictionary env sigEnv (name, spec) = do
     let instances = Ms.rinstance spec
-        resolved =
-          resolveDictionaries env $
-          map (makeSpecDictionaryOne env sigEnv name) instances
-        updatedInstances =
+    resolved <-
+        resolveDictionaries env <$>
+          traverse (makeSpecDictionaryOne env sigEnv name) instances
+    let updatedInstances =
           [ ri { riDictName = Just $ makeGHCLHNameLocatedFromId v }
           | (ri, (v, _)) <- zip instances resolved
           ]
-     in (updatedInstances, resolved)
+    return (updatedInstances, resolved)
 
-makeSpecDictionaryOne :: Bare.Env -> Bare.SigEnv -> ModName
+makeSpecDictionaryOne :: forall m . Monad m => Bare.Env -> Bare.SigEnv -> ModName
                       -> RInstance LocBareType
-                      -> RInstance LocSpecType
+                      -> Bare.LookupT m (RInstance LocSpecType)
 makeSpecDictionaryOne env sigEnv name (RI bt mDictName lbt xts)
-         = F.notracepp "RI" $ RI bt mDictName ts [(x, mkLSpecIType t) | (x, t) <- xts ]
+  = fmap (F.notracepp "RI")
+  $ RI
+    <$> pure bt
+    <*> pure mDictName
+    <*> ts
+    <*> traverse (bitraverse pure mkLSpecIType) xts
   where
-    ts      = mkTy' <$> lbt
-    rts     = concatMap (univs . val) ts
+    ts      = traverse mkTy' lbt
+    rts     = concatMap (univs . val) <$> ts
     univs t = (\(RTVar tv _, _) -> tv) <$> as where (as, _, _) = bkUniv t
 
-    mkTy' :: LocBareType -> LocSpecType
+    mkTy' :: LocBareType -> Bare.LookupT m LocSpecType
     mkTy' = Bare.cookSpecType env sigEnv name Bare.GenTV
-    mkTy :: LocBareType -> LocSpecType
-    mkTy = fmap (mapUnis tidy) . Bare.cookSpecType env sigEnv name
-               Bare.GenTV -- (Bare.HsTV (Bare.lookupGhcVar env name "rawDictionaries" x))
-    mapUnis f t = mkUnivs (f as) ps t0 where (as, ps, t0) = bkUniv t
+    mkTy :: LocBareType -> Bare.LookupT m LocSpecType
+    mkTy = traverse (mapUnis tidy) <=< mkTy'
 
-    tidy vs = l ++ r
-      where (l,r) = L.partition (\(RTVar tv _,_) -> tv `elem` rts) vs
+    mapUnis f t = do
+      let (as, ps, t0) = bkUniv t
+      as' <- f as
+      return $ mkUnivs as' ps t0
 
-    mkLSpecIType :: RISig LocBareType -> RISig LocSpecType
-    mkLSpecIType t = fmap mkTy t
+    tidy vs = do
+      (l,r) <- partitionM (\(RTVar tv _,_) -> rts >>= return . (tv `elem`)) vs
+      return (l ++ r)
+
+    mkLSpecIType :: RISig LocBareType -> Bare.LookupT m (RISig LocSpecType)
+    mkLSpecIType t = traverse mkTy t
 
 resolveDictionaries :: Bare.Env -> [RInstance LocSpecType]
                     -> [(Ghc.Var, M.HashMap F.Symbol (RISig LocSpecType))]

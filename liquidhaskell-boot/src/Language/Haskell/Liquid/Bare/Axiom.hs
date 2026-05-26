@@ -64,8 +64,8 @@ findDuplicateBetweenLists key l1 l2 =
       [ (x, y) | x <- l2', Just y <- [Map.lookup (key' x) seen]]
 
 -----------------------------------------------------------------------------------------------
-makeHaskellAxioms :: GhcSrc -> Bare.Env -> Bare.TycEnv -> LogicMap -> GhcSpecSig -> Ms.BareSpec
-                  -> Bare.Lookup [(Ghc.Var, LocSpecType, F.Equation)]
+makeHaskellAxioms :: Monad m => GhcSrc -> Bare.Env -> Bare.TycEnv -> LogicMap -> GhcSpecSig -> Ms.BareSpec
+                  -> Bare.LookupT m [(Ghc.Var, LocSpecType, F.Equation)]
 -----------------------------------------------------------------------------------------------
 makeHaskellAxioms src env tycEnv lmap spSig spec = do
   let refDefs = getReflectDefs src spSig spec env
@@ -79,8 +79,8 @@ makeHaskellAxioms src env tycEnv lmap spSig spec = do
 --   ``VV == pretendedFn arg1 arg2 ...`                                                      --
 -- * The assume reflect equation, linking the pretended and actual function:                 --
 --   `actualFn arg1 arg 2 ... = pretendedFn arg1 arg2 ...`                                   --
-makeAssumeReflectAxioms :: GhcSrc -> Bare.Env -> Bare.TycEnv -> GhcSpecSig -> Ms.BareSpec
-                  -> Bare.Lookup [(Ghc.Var, LocSpecType, F.Equation)]
+makeAssumeReflectAxioms :: Monad m => GhcSrc -> Bare.Env -> Bare.TycEnv -> GhcSpecSig -> Ms.BareSpec
+                  -> Bare.LookupT m [(Ghc.Var, LocSpecType, F.Equation)]
 -----------------------------------------------------------------------------------------------
 makeAssumeReflectAxioms src env tycEnv spSig spec = do
   -- Send an error message if we're redefining a reflection

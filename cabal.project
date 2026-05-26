@@ -1,5 +1,7 @@
 with-compiler: ghc-9.14.1
 
+write-ghc-environment-files: always
+
 packages: .
           ./liquid-finfield
           ./liquid-fixpoint

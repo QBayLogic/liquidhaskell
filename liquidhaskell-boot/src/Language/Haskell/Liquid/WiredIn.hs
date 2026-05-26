@@ -1,3 +1,4 @@
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -210,9 +211,9 @@ wiredInName = "WiredIn"
 
 tupleNames :: [(Int, [LHName], [LHName])]
 tupleNames =
-  $(listE $ flip map [2..maxArity] $ \n ->
-    let xs = map (logic . F.symbol . ("x_Tuple"   <>) . show) [1..n]
-        fs = map (logic . F.symbol . ("fld_Tuple" <>) . show) [2..n]
+  $(listE $ flip map [2..8::Int] $ \n ->
+    let xs = map (logic . F.symbol . (("x_Tuple_"   <> show n) <>) . show) [1..n]
+        fs = map (logic . F.symbol . (("fld_Tuple_" <> show n) <>) . show) [2..n]
         ln = lift n
      in tupE [ln, listE xs, listE fs]
   )
@@ -288,4 +289,4 @@ derivingClasses =
   ]
 
 wiredInUniqueBound :: Word64
-wiredInUniqueBound = $(sealUniqueCounter >>= lift)
+wiredInUniqueBound = $(sealUniqueCounter >> [| 0x8000_0000_0000_0000 |])

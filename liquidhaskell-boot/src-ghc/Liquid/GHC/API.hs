@@ -523,6 +523,7 @@ import GHC.Rename.Expr                as Ghc (rnLExpr)
 import GHC.Rename.Names               as Ghc
     ( renamePkgQual
     )
+import GHC.Settings.Constants         as Ghc (mAX_TUPLE_SIZE)
 import GHC.Tc.Errors.Types            as Ghc
     ( mkTcRnUnknownMessage )
 import GHC.Tc.Gen.Bind                as Ghc (tcValBinds)

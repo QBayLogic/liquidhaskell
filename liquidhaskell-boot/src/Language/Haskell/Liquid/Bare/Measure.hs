@@ -24,8 +24,11 @@ module Language.Haskell.Liquid.Bare.Measure
   ) where
 
 import qualified Control.Exception as Ex
+import Control.Monad ((<=<), filterM, mapM, forM)
 import Prelude hiding (mapM, error)
 import Data.Bifunctor
+import Data.Bitraversable
+import Data.Functor ((<&>))
 import qualified Data.Maybe as Mb
 import Text.PrettyPrint.HughesPJ (text)
 -- import Text.Printf     (printf)
@@ -58,11 +61,9 @@ import qualified Language.Haskell.Liquid.Bare.Expand   as Bare
 import qualified Language.Haskell.Liquid.Bare.DataType as Bare
 import qualified Language.Haskell.Liquid.Bare.ToBare   as Bare
 import           Language.Haskell.Liquid.UX.Config
-import Control.Monad (mapM)
 import qualified Data.List as L
 
 import GHC.Base (Int(I#))
-import Language.Haskell.Liquid.LHNameResolution (runUniqueMFIXME)
 
 --------------------------------------------------------------------------------
 makeHaskellMeasures :: Config -> GhcSrc -> Bare.TycEnv -> LogicMap -> Ms.BareSpec
@@ -165,11 +166,12 @@ coreToFun' cfg embs dmMb lmap x v defn ok = either Ex.throw ok act
 
 
 -------------------------------------------------------------------------------
-makeHaskellDataDecls :: Ms.BareSpec -> [Ghc.TyCon] -> [DataDecl]
+makeHaskellDataDecls :: Monad m => Ms.BareSpec -> [Ghc.TyCon] -> Bare.LookupT m [DataDecl]
 --------------------------------------------------------------------------------
 makeHaskellDataDecls spec tcs =
-    Bare.dataDeclSize spec
-    . Mb.mapMaybe tyConDataDecl
+    fmap (Bare.dataDeclSize spec)
+    . fmap Mb.catMaybes
+    . mapM tyConDataDecl
     . zipMap   (hasDataDecl spec . fst)
     . liftableTyCons
     . filter isReflectableTyCon
@@ -206,21 +208,22 @@ hasDataDecl spec
                                 , let dn = tycName d]
 
 {-tyConDataDecl :: {tc:TyCon | isAlgTyCon tc} -> Maybe DataDecl @-}
-tyConDataDecl :: ((Ghc.TyCon, DataName), HasDataDecl) -> Maybe DataDecl
+tyConDataDecl :: Monad m => ((Ghc.TyCon, DataName), HasDataDecl) -> Bare.LookupT m (Maybe DataDecl)
 tyConDataDecl (_, HasDecl)
-  = Nothing
+  = pure Nothing
 tyConDataDecl ((tc, dn), NoDecl szF)
-  = Just $ DataDecl
-      { tycName   = dn
-      , tycTyVars = F.symbol <$> GM.tyConTyVarsDef tc
-      , tycPVars  = []
-      , tycDCons  = Just (decls tc)
-      , tycSrcPos = GM.getSourcePos tc
-      , tycSFun   = szF
-      , tycPropTy = Nothing
-      , tycKind   = DataReflected
-      }
-      where decls = map dataConDecl . Ghc.tyConDataCons
+  = do
+      dcons <- mapM dataConDecl $ Ghc.tyConDataCons tc
+      return $ Just $ DataDecl
+        { tycName   = dn
+        , tycTyVars = F.symbol <$> GM.tyConTyVarsDef tc
+        , tycPVars  = []
+        , tycDCons  = Just dcons
+        , tycSrcPos = GM.getSourcePos tc
+        , tycSFun   = szF
+        , tycPropTy = Nothing
+        , tycKind   = DataReflected
+        }
 
 tyConDataName :: Ghc.TyCon -> Maybe DataName
 tyConDataName tc
@@ -231,12 +234,16 @@ tyConDataName tc
     vanillaTc  = Ghc.isVanillaAlgTyCon tc
     dcs        = Misc.sortOn F.symbol (Ghc.tyConDataCons tc)
 
-dataConDecl :: Ghc.DataCon -> DataCtor
-dataConDecl d     = {- F.notracepp msg $ -} DataCtor dx (F.symbol <$> as) [] xts outT
+dataConDecl :: Monad m => Ghc.DataCon -> Bare.LookupT m DataCtor
+dataConDecl d     = do
+    xts <- forM its $ \(i, t) -> do
+      x <- makeGeneratedLogicLHName $ Bare.makeDataConSelector Nothing d i
+      pure (x, RT.bareOfType t)
+    return $ {- F.notracepp msg $ -} DataCtor dx (F.symbol <$> as) [] xts outT
   where
     isGadt        = not (Ghc.isVanillaDataCon d)
     -- msg           = printf "dataConDecl (gadt = %s)" (show isGadt)
-    xts           = [(runUniqueMFIXME $ makeGeneratedLogicLHName $ Bare.makeDataConSelector Nothing d i, RT.bareOfType t) | (i, t) <- its ]
+
     dx            = makeGHCLHNameLocated d
     its           = zip [1..] ts
     (as,_ps,ts,ty)  = Ghc.dataConSig d
@@ -255,10 +262,10 @@ dataConDecl d     = {- F.notracepp msg $ -} DataCtor dx (F.symbol <$> as) [] xts
 --   the selectors and checkers that then enable reflection.
 --------------------------------------------------------------------------------
 
-makeMeasureSelectors :: Config -> Bare.DataConMap -> Located DataConP -> [Measure SpecType Ghc.DataCon]
+makeMeasureSelectors :: Monad m => Config -> Bare.DataConMap -> Located DataConP -> Bare.LookupT m [Measure SpecType Ghc.DataCon]
 makeMeasureSelectors cfg dm (Loc l l' c)
-  = checker : Mb.mapMaybe go' fields --  internal measures, needed for reflection
- ++ Misc.condNull autofields (Mb.mapMaybe go fields) --  user-visible measures.
+  = (:) <$> checker <*> (Mb.catMaybes <$> mapM go' fields) --  internal measures, needed for reflection
+    <&> (++ Misc.condNull autofields (Mb.mapMaybe go fields)) --  user-visible measures.
   where
     dc         = dcpCon    c
     isGadt     = dcpIsGadt c
@@ -275,13 +282,17 @@ makeMeasureSelectors cfg dm (Loc l l' c)
     go' ((_,t), i)
       -- do not make selectors for functional fields
       | isFunTy t && not (higherOrderFlag cfg)
-      = Nothing
+      = pure Nothing
       | otherwise
-      = Just $ makeMeasureSelector (Loc l l' (runUniqueMFIXME $ makeGeneratedLogicLHName $ Bare.makeDataConSelector (Just dm) dc i)) (projT i) dc n i
+      = do
+          name <- makeGeneratedLogicLHName $ Bare.makeDataConSelector (Just dm) dc i
+          return $ Just $ makeMeasureSelector (Loc l l' name) (projT i) dc n i
 
     fields   = zip (reverse xts) [1..]
     n        = length xts
-    checker  = makeMeasureChecker (Loc l l' (runUniqueMFIXME $ makeGeneratedLogicLHName $ Bare.makeDataConChecker dc)) checkT dc n
+    checker = do
+      name <- makeGeneratedLogicLHName $ Bare.makeDataConChecker dc
+      return $ makeMeasureChecker (Loc l l' name) checkT dc n
     projT i  = dataConSel permitTC dc n (Proj i)
     checkT   = dataConSel permitTC dc n Check
     permitTC = typeclass cfg
@@ -355,15 +366,15 @@ makeMeasureSpec' allowTC mspec0 = (ctorTys, measTys)
     mspec               = first (mapReft ur_reft) mspec0
 
 ----------------------------------------------------------------------------------------------
-makeMeasureSpec :: Bare.Env -> Bare.SigEnv -> ModName -> (ModName, Ms.BareSpec) ->
-                   Bare.Lookup (Ms.MSpec SpecType Ghc.DataCon)
+makeMeasureSpec :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> (ModName, Ms.BareSpec) ->
+                   Bare.LookupT m (Ms.MSpec SpecType Ghc.DataCon)
 ----------------------------------------------------------------------------------------------
 makeMeasureSpec env sigEnv myName (name, spec)
-  = mkMeasureDCon env
-  . mkMeasureSort env
-  . first val
-  . bareMSpec     env sigEnv myName name
-  $ spec
+  =   mkMeasureDCon env
+  <=< mkMeasureSort env
+  <=< return . first val
+  <=< bareMSpec     env sigEnv myName name
+  $   spec
 
 --- Returns all the reflected symbols.
 --- If Env is provided, the symbols are qualified using the environment.
@@ -497,20 +508,20 @@ collectDataCons expr = go expr S.empty
     goBind (Ghc.NonRec _ e) acc = go e acc
     goBind (Ghc.Rec binds) acc = foldr (go . snd) acc binds
 
-bareMSpec :: Bare.Env -> Bare.SigEnv -> ModName -> ModName -> Ms.BareSpec -> Ms.MSpec LocBareType (Located LHName)
-bareMSpec env sigEnv myName name spec = Ms.mkMSpec ms cms ims oms
+bareMSpec :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> ModName -> Ms.BareSpec -> Bare.LookupT m (Ms.MSpec LocBareType (Located LHName))
+bareMSpec env sigEnv myName name spec = Ms.mkMSpec <$> ms <*> cms <*> ims <*> oms
   where
-    cms        = F.notracepp "CMS" $ filter inScope $             Ms.cmeasures spec
-    ms         = F.notracepp "UMS" $ filter inScope $ expMeas <$> Ms.measures  spec
-    ims        = F.notracepp "IMS" $ filter inScope $ expMeas <$> Ms.imeasures spec
-    oms        = F.notracepp "OMS" $ filter inScope $ expMeas <$> Ms.omeasures spec
+    cms        = fmap (F.notracepp "CMS") $ filterM inScope $             Ms.cmeasures spec
+    ms         = fmap (F.notracepp "UMS") $ filterM inScope $ expMeas <$> Ms.measures  spec
+    ims        = fmap (F.notracepp "IMS") $ filterM inScope $ expMeas <$> Ms.imeasures spec
+    oms        = fmap (F.notracepp "OMS") $ filterM inScope $ expMeas <$> Ms.omeasures spec
     expMeas    = expandMeasure rtEnv
     rtEnv      = Bare.sigRTEnv          sigEnv
     force      = name == myName
-    inScope z = F.notracepp ("inScope1: " ++ F.showpp (msName z)) (force ||  okSort z)
+    inScope z = F.notracepp ("inScope1: " ++ F.showpp (msName z)) . (force ||) <$> okSort z
     okSort     = Bare.knownGhcType env . msSort
 
-mkMeasureDCon :: Bare.Env -> Ms.MSpec t (F.Located LHName) -> Bare.Lookup (Ms.MSpec t Ghc.DataCon)
+mkMeasureDCon :: Monad m => Bare.Env -> Ms.MSpec t (F.Located LHName) -> Bare.LookupT m (Ms.MSpec t Ghc.DataCon)
 mkMeasureDCon env m = do
   let ns = measureCtors m
   dcs   <- mapM (Bare.lookupGhcDataConLHName env) ns
@@ -528,19 +539,28 @@ mkMeasureDCon_ m ndcs = fmap (tx . val) m
 measureCtors ::  Ms.MSpec t (F.Located LHName) -> [F.Located LHName]
 measureCtors = Misc.sortNub . fmap ctor . concat . M.elems . Ms.ctorMap
 
-mkMeasureSort :: Bare.Env -> Ms.MSpec BareType (F.Located LHName)
-              -> Ms.MSpec SpecType (F.Located LHName)
+mkMeasureSort :: Monad m => Bare.Env -> Ms.MSpec BareType (F.Located LHName)
+              -> Bare.LookupT m (Ms.MSpec SpecType (F.Located LHName))
 mkMeasureSort env (Ms.MSpec c mm cm im) =
-  Ms.MSpec (map txDef <$> c) (tx <$> mm) (tx <$> cm) (tx <$> im)
-    where
-      ofMeaSort :: F.SourcePos -> BareType -> SpecType
-      ofMeaSort l = Bare.ofBareType env l Nothing
+  Ms.MSpec
+    <$> traverse (traverse txDef) c
+    <*> traverse tx mm
+    <*> traverse tx cm
+    <*> traverse tx im
+ where
+  ofMeaSort :: Monad m => F.SourcePos -> BareType -> Bare.LookupT m SpecType
+  ofMeaSort l = Bare.ofBareType env l Nothing
 
-      tx :: Measure BareType ctor -> Measure SpecType ctor
-      tx (M n s eqs k u) = M n (ofMeaSort l s) (txDef <$> eqs) k u where l = GM.fSourcePos n
+  tx :: Monad m => Measure BareType ctor -> Bare.LookupT m (Measure SpecType ctor)
+  tx (M n s eqs k u) = do
+    let l = GM.fSourcePos n
+    sort <- ofMeaSort l s
+    eqs' <- traverse txDef eqs
+    return $ M n sort eqs' k u
 
-      txDef :: Def BareType ctor -> Def SpecType ctor
-      txDef d = first (ofMeaSort l) d                              where l = GM.fSourcePos (measure d)
+  txDef :: Monad m => Def BareType ctor -> Bare.LookupT m (Def SpecType ctor)
+  txDef d = bitraverse (ofMeaSort l) pure d
+        where l = GM.fSourcePos (measure d)
 
 
 

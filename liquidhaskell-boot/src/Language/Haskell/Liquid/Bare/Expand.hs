@@ -29,7 +29,6 @@ import Data.Graph hiding (Graph)
 import Data.Maybe
 
 import           Control.Monad
-import           Control.Monad.Identity
 import           Control.Monad.State
 import           Data.Bifunctor (second)
 import           Data.Functor ((<&>))
@@ -69,29 +68,31 @@ import qualified Text.Printf                           as Printf
 --   that is, the below needs to be called *before* we use `Expand.expand`
 --------------------------------------------------------------------------------
 makeRTEnv
-  :: LogicNameEnv
+  :: Monad m
+  => LogicNameEnv
   -> ModName
   -> Ms.BareSpec
   -> [(ModName, Ms.BareSpec)]
-  -> BareRTEnv
+  -> Bare.LookupT m BareRTEnv
 --------------------------------------------------------------------------------
 makeRTEnv lenv modName mySpec dependencySpecs
-          = renameRTArgs $ makeRTAliases tAs $ makeREAliases eAs
+          = renameRTArgs . makeRTAliases tAs . makeREAliases <$> eAs
   where
     tAs     = concatMap (Ms.aliases . snd) specs
-    eAs     = concatMap (getLHNameExprAliases . snd) specs
+    eAs     = concat <$> mapM (getLHNameExprAliases . snd) specs
     specs = (modName, mySpec) : dependencySpecs
 
     -- | 'Symbol's are temporarily converted to 'LHName's in expression alias
     -- bodies to use the same lookup and expansion procedure for both
     -- kinds of aliases. Implemented as an specialization of
     -- 'toBareSpecLHName' for the expression aliases field.
-    getLHNameExprAliases:: Ms.BareSpec -> [RTAlias F.Symbol (ExprV LHName)]
-    getLHNameExprAliases = runIdentity . go
+    getLHNameExprAliases:: Monad m => Ms.BareSpec -> Bare.LookupT m [RTAlias F.Symbol (ExprV LHName)]
+    getLHNameExprAliases = go
 
-    go :: Ms.BareSpec -> Identity [RTAlias F.Symbol (ExprV LHName)]
+    go :: Monad m => Ms.BareSpec -> Bare.LookupT m [RTAlias F.Symbol (ExprV LHName)]
     go = mapM (emapRTAlias (\e -> emapExprVM (symToLHName . (++ e)))) . ealiases
 
+    symToLHName :: Monad m => [F.Symbol] -> F.Symbol -> Bare.LookupT m LHName
     symToLHName = symbolToLHName "makeRTEnv" lenv unhandledNames
     unhandledNames = HS.fromList $ map fst $ expSigs mySpec
 
@@ -494,19 +495,18 @@ errRTAliasApp l la rta = Just . ErrAliasApp  sp name sp'
 --   in multiple steps, into a @SpecType@. See [NOTE:Cooking-SpecType] for
 --   details of each of the individual steps.
 ----------------------------------------------------------------------------------------
-cookSpecType :: Bare.Env -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> LocBareType
-             -> LocSpecType
+cookSpecType :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> LocBareType
+             -> Bare.LookupT m LocSpecType
 cookSpecType env sigEnv name x bt =
-  either Ex.throw id $
-  Bare.runLookupFIXME $ cookSpecTypeE env sigEnv name x bt
+    cookSpecTypeE env sigEnv name x bt
   where
     _msg = "cookSpecType: " ++ GM.showPpr (z, Ghc.varType <$> z)
     z    = Bare.plugSrc x
 
 
 -----------------------------------------------------------------------------------------
-cookSpecTypeE :: Bare.Env -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> LocBareType
-              -> Bare.Lookup LocSpecType
+cookSpecTypeE :: Monad m => Bare.Env -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> LocBareType
+              -> Bare.LookupT m LocSpecType
 -----------------------------------------------------------------------------------------
 cookSpecTypeE env sigEnv name@(ModName _ _) x bt
   = fmap f . bareSpecType env $ bareExpandType rtEnv bt
@@ -560,7 +560,7 @@ bareExpandType = expandLoc
 specExpandType :: BareRTEnv -> LocSpecType -> LocSpecType
 specExpandType = expandLoc
 
-bareSpecType :: Bare.Env -> LocBareType -> Bare.Lookup LocSpecType
+bareSpecType :: Monad m => Bare.Env -> LocBareType -> Bare.LookupT m LocSpecType
 bareSpecType env bt = F.atLoc bt <$> Bare.ofBareTypeE env (F.loc bt) Nothing (val bt)
 
 maybePlug :: Bool -> Bare.SigEnv -> ModName -> Bare.PlugTV Ghc.Var -> LocSpecType -> LocSpecType

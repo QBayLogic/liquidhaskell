@@ -1,4 +1,4 @@
-module Language.Haskell.Liquid.WiredIn.TH where
+module Language.Haskell.Liquid.WiredIn.TH (logic, ghc, sealUniqueCounter) where
 
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
@@ -11,9 +11,6 @@ import Language.Haskell.Liquid.Types.Names
 import qualified Language.Fixpoint.Types as F
 import qualified Liquid.GHC.API as GHC
 import Control.Monad (unless)
-
-maxArity :: Arity
-maxArity = 7
 
 {-# NOINLINE uniqueCounterRef #-}
 uniqueCounterRef :: IORef (Maybe Word64)

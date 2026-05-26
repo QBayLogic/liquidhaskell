@@ -467,16 +467,16 @@ bTyConP
      )
  <?> "bTyConP"
 
-locUpperIdLHNameP :: LHNameSpace -> Parser (Located LHName)
+locUpperIdLHNameP :: LHNameSpace -> Parser (Located LHUnresolved)
 locUpperIdLHNameP ns = fmap (makeUnresolvedLHName ns) <$> locUpperIdP
 
-mkPromotedBTyCon :: Located LHName -> BTyCon
+mkPromotedBTyCon :: Located LHUnresolved -> BTyCon
 mkPromotedBTyCon x = BTyCon x False True -- (consSym '\'' <$> x) False True
 
 classBTyConP :: Parser BTyCon
 classBTyConP = mkClassBTyCon <$> locUpperIdLHNameP (LHTcName LHAnyModuleNameF)
 
-mkClassBTyCon :: Located LHName -> BTyCon
+mkClassBTyCon :: Located LHUnresolved -> BTyCon
 mkClassBTyCon x = BTyCon x True False
 
 bbaseNoAppP :: Parser (ReftV LocSymbol -> BareTypeParsed)
@@ -877,45 +877,45 @@ dummyTyId = ""
 
 -- | The AST for a single parsed spec.
 data BPspec
-  = Meas    (MeasureV LocSymbol LocBareTypeParsed (Located LHName)) -- ^ 'measure' definition
-  | Assm    (Located LHName, LocBareTypeParsed)              -- ^ 'assume' signature (unchecked)
-  | AssmReflect (Located LHName, Located LHName)             -- ^ 'assume reflects' signature (unchecked)
-  | Asrt    (Located LHName, LocBareTypeParsed)              -- ^ 'assert' signature (checked)
-  | Asrts   ([Located LHName], (LocBareTypeParsed, Maybe [Located (ExprV LocSymbol)])) -- ^ sym0, ..., symn :: ty / [m0,..., mn]
+  = Meas    (MeasureV LocSymbol LocBareTypeParsed (Located LHUnresolved)) -- ^ 'measure' definition
+  | Assm    (Located LHUnresolved, LocBareTypeParsed)              -- ^ 'assume' signature (unchecked)
+  | AssmReflect (Located LHUnresolved, Located LHUnresolved)             -- ^ 'assume reflects' signature (unchecked)
+  | Asrt    (Located LHUnresolved, LocBareTypeParsed)              -- ^ 'assert' signature (checked)
+  | Asrts   ([Located LHUnresolved], (LocBareTypeParsed, Maybe [Located (ExprV LocSymbol)])) -- ^ sym0, ..., symn :: ty / [m0,..., mn]
   | DDecl   DataDeclParsed                                -- ^ refined 'data'    declaration
   | NTDecl  DataDeclParsed                                -- ^ refined 'newtype' declaration
-  | Relational (Located LHName, Located LHName, LocBareTypeParsed, LocBareTypeParsed, RelExprV LocSymbol, RelExprV LocSymbol) -- ^ relational signature
-  | AssmRel (Located LHName, Located LHName, LocBareTypeParsed, LocBareTypeParsed, RelExprV LocSymbol, RelExprV LocSymbol) -- ^ 'assume' relational signature
+  | Relational (Located LHUnresolved, Located LHUnresolved, LocBareTypeParsed, LocBareTypeParsed, RelExprV LocSymbol, RelExprV LocSymbol) -- ^ relational signature
+  | AssmRel (Located LHUnresolved, Located LHUnresolved, LocBareTypeParsed, LocBareTypeParsed, RelExprV LocSymbol, RelExprV LocSymbol) -- ^ 'assume' relational signature
   | Class   (RClass LocBareTypeParsed)                    -- ^ refined 'class' definition
   | RInst   (RInstance LocBareTypeParsed)                 -- ^ refined 'instance' definition
   | Invt    LocBareTypeParsed                             -- ^ 'invariant' specification
   | Using  (LocBareTypeParsed, LocBareTypeParsed)         -- ^ 'using' declaration (for local invariants on a type)
   | Alias   (RTAlias Symbol BareTypeParsed)               -- ^ 'type' alias declaration
   | EAlias  (RTAlias Symbol (ExprV LocSymbol))            -- ^ 'predicate' alias declaration
-  | Embed   (Located LHName, Sort, TCArgs)                -- ^ 'embed' declaration
+  | Embed   (Located LHUnresolved, Sort, TCArgs)                -- ^ 'embed' declaration
   | Qualif  (QualifierV LocSymbol)                        -- ^ 'qualif' definition
-  | LVars   (Located LHName)                              -- ^ 'lazyvar' annotation, defer checks to *use* sites
-  | Lazy    (Located LHName)                              -- ^ 'lazy' annotation, skip termination check on binder
-  | Fail    (Located LHName)                              -- ^ 'fail' annotation, the binder should be unsafe
-  | Rewrite (Located LHName)                              -- ^ 'rewrite' annotation, the binder generates a rewrite rule
-  | Rewritewith (Located LHName, [Located LHName])        -- ^ 'rewritewith' annotation, the first binder is using the rewrite rules of the second list,
-  | Insts   (Located LHName)                              -- ^ 'auto-inst' or 'ple' annotation; use ple locally on binder
-  | HMeas   (Located LHName)                              -- ^ 'measure' annotation; lift Haskell binder as measure
-  | Reflect (Located LHName)                              -- ^ 'reflect' annotation; reflect Haskell binder as function in logic
-  | Stratified (Located LHName)                           -- ^ 'stratified' annotation; stratification check for type declarations
+  | LVars   (Located LHUnresolved)                              -- ^ 'lazyvar' annotation, defer checks to *use* sites
+  | Lazy    (Located LHUnresolved)                              -- ^ 'lazy' annotation, skip termination check on binder
+  | Fail    (Located LHUnresolved)                              -- ^ 'fail' annotation, the binder should be unsafe
+  | Rewrite (Located LHUnresolved)                              -- ^ 'rewrite' annotation, the binder generates a rewrite rule
+  | Rewritewith (Located LHUnresolved, [Located LHUnresolved])        -- ^ 'rewritewith' annotation, the first binder is using the rewrite rules of the second list,
+  | Insts   (Located LHUnresolved)                              -- ^ 'auto-inst' or 'ple' annotation; use ple locally on binder
+  | HMeas   (Located LHUnresolved)                              -- ^ 'measure' annotation; lift Haskell binder as measure
+  | Reflect (Located LHUnresolved)                              -- ^ 'reflect' annotation; reflect Haskell binder as function in logic
+  | Stratified (Located LHUnresolved)                           -- ^ 'stratified' annotation; stratification check for type declarations
   | PrivateReflect LocSymbol                              -- ^ 'private-reflect' annotation
-  | OpaqueReflect (Located LHName)                        -- ^ 'opaque-reflect' annotation
-  | Inline  (Located LHName)                              -- ^ 'inline' annotation;  inline (non-recursive) binder as an alias
-  | Ignore  (Located LHName)                              -- ^ 'ignore' annotation; skip all checks inside this binder
-  | ASize   (Located LHName)                              -- ^ 'autosize' annotation; automatically generate size metric for this type
+  | OpaqueReflect (Located LHUnresolved)                        -- ^ 'opaque-reflect' annotation
+  | Inline  (Located LHUnresolved)                              -- ^ 'inline' annotation;  inline (non-recursive) binder as an alias
+  | Ignore  (Located LHUnresolved)                              -- ^ 'ignore' annotation; skip all checks inside this binder
+  | ASize   (Located LHUnresolved)                              -- ^ 'autosize' annotation; automatically generate size metric for this type
   | PBound  (Bound LocBareTypeParsed (ExprV LocSymbol))   -- ^ 'bound' definition
   | Pragma  (Located String)                              -- ^ 'LIQUID' pragma, used to save configuration options in source files
   | CMeas   (MeasureV LocSymbol LocBareTypeParsed ())     -- ^ 'class measure' definition
-  | IMeas   (MeasureV LocSymbol LocBareTypeParsed (Located LHName)) -- ^ 'instance measure' definition
-  | Varia   (Located LHName, [Variance])                  -- ^ 'variance' annotations, marking type constructor params as co-, contra-, or in-variant
+  | IMeas   (MeasureV LocSymbol LocBareTypeParsed (Located LHUnresolved)) -- ^ 'instance measure' definition
+  | Varia   (Located LHUnresolved, [Variance])                  -- ^ 'variance' annotations, marking type constructor params as co-, contra-, or in-variant
   | DSize   ([LocBareTypeParsed], LocSymbol)              -- ^ 'data size' annotations, generating fancy termination metric
   | BFix    ()                                            -- ^ fixity annotation
-  | Define  (Located LHName, ([Symbol], ExprV LocSymbol)) -- ^ 'define' annotation for specifying logic aliases
+  | Define  (Located LHUnresolved, ([Symbol], ExprV LocSymbol)) -- ^ 'define' annotation for specifying logic aliases
   deriving (Data)
 
 instance PPrint BPspec where
@@ -924,7 +924,7 @@ instance PPrint BPspec where
 splice :: PJ.Doc -> [PJ.Doc] -> PJ.Doc
 splice sep = PJ.hcat . PJ.punctuate sep
 
-ppAsserts :: (PPrint t) => Tidy -> [Located LHName] -> t -> Maybe [Located (ExprV LocSymbol)] -> PJ.Doc
+ppAsserts :: (PPrint t) => Tidy -> [Located LHUnresolved] -> t -> Maybe [Located (ExprV LocSymbol)] -> PJ.Doc
 ppAsserts k lxs t mles
   = PJ.hcat [ splice ", " (map (pprintTidy k . val) lxs)
             , " :: "
@@ -935,7 +935,7 @@ ppAsserts k lxs t mles
     ppLes Nothing    = ""
     ppLes (Just les) = "/" <+> pprintTidy k (fmap val . val <$> les)
 
-pprintSymbolWithParens :: LHName -> PJ.Doc
+pprintSymbolWithParens :: LHUnresolved -> PJ.Doc
 pprintSymbolWithParens lhname =
     case symbolString $ getLHNameSymbol lhname of
       n@(c:_) | not (Char.isAlpha c) -> "(" <> PJ.text n <> ")"
@@ -1196,8 +1196,8 @@ fallbackSpecP kw p = do
 
 -- | Same as tyBindsP, except the single initial symbol has already been matched
 tyBindsRemP
-  :: Located LHName
-  -> Parser ([Located LHName], (Located BareTypeParsed, Maybe [Located (ExprV LocSymbol)]))
+  :: Located LHUnresolved
+  -> Parser ([Located LHUnresolved], (Located BareTypeParsed, Maybe [Located (ExprV LocSymbol)]))
 tyBindsRemP sy = do
   reservedOp "::"
   tb <- termBareTypeP
@@ -1206,13 +1206,13 @@ tyBindsRemP sy = do
 pragmaP :: Parser (Located String)
 pragmaP = locStringLiteral
 
-rewriteWithP :: Parser (Located LHName, [Located LHName])
+rewriteWithP :: Parser (Located LHUnresolved, [Located LHUnresolved])
 rewriteWithP = (,) <$> locBinderLHNameP <*> brackets (sepBy1 locBinderLHNameP comma)
 
 axiomP :: Parser LocSymbol
 axiomP = locBinderP
 
-datavarianceP :: Parser (Located LHName, [Variance])
+datavarianceP :: Parser (Located LHUnresolved, [Variance])
 datavarianceP = liftM2 (,) (locUpperIdLHNameP (LHTcName LHAnyModuleNameF)) (many varianceP)
 
 dsizeP :: Parser ([Located BareTypeParsed], Located Symbol)
@@ -1226,7 +1226,7 @@ varianceP = (reserved "bivariant"     >> return Bivariant)
         <|> (reserved "contravariant" >> return Contravariant)
         <?> "Invalid variance annotation\t Use one of bivariant, invariant, covariant, contravariant"
 
-tyBindsP :: Parser ([Located LHName], (Located BareTypeParsed, Maybe [Located (ExprV LocSymbol)]))
+tyBindsP :: Parser ([Located LHUnresolved], (Located BareTypeParsed, Maybe [Located (ExprV LocSymbol)]))
 tyBindsP =
   xyP (sepBy1 locBinderThisModuleLHNameP comma) (reservedOp "::") termBareTypeP
 
@@ -1238,18 +1238,18 @@ tyBindP :: Parser (LocSymbol, Located BareTypeParsed)
 tyBindP =
   (,) <$> locBinderP <* reservedOp "::" <*> located genBareTypeP
 
-tyBindLogicNameP :: Parser (Located LHName, Located BareTypeParsed)
+tyBindLogicNameP :: Parser (Located LHUnresolved, Located BareTypeParsed)
 tyBindLogicNameP =
   (,) <$> locBinderLogicNameP <* reservedOp "::" <*> located genBareTypeP
 
-tyBindLHNameP :: Parser (Located LHName, Located BareTypeParsed)
+tyBindLHNameP :: Parser (Located LHUnresolved, Located BareTypeParsed)
 tyBindLHNameP = do
     x <- locBinderLHNameP
     _ <- reservedOp "::"
     t <- located genBareTypeP
     return (x, t)
 
-tyBindLocalLHNameP :: Parser (Located LHName, Located BareTypeParsed)
+tyBindLocalLHNameP :: Parser (Located LHUnresolved, Located BareTypeParsed)
 tyBindLocalLHNameP = do
     x <- locBinderThisModuleLHNameP
     _ <- reservedOp "::"
@@ -1257,7 +1257,7 @@ tyBindLocalLHNameP = do
     return (x, t)
 
 -- | Parses a loc symbol.
-assmReflectBindP :: Parser (Located LHName, Located LHName)
+assmReflectBindP :: Parser (Located LHUnresolved, Located LHUnresolved)
 assmReflectBindP =
   (,) <$> locBinderLHNameP <* reservedOp "as" <*> locBinderLHNameP
 
@@ -1288,7 +1288,7 @@ invaliasP
 genBareTypeP :: Parser BareTypeParsed
 genBareTypeP = bareTypeP
 
-embedP :: Parser (Located LHName, Sort, TCArgs)
+embedP :: Parser (Located LHUnresolved, Sort, TCArgs)
 embedP = do
   x <- locUpperIdLHNameP (LHTcName LHAnyModuleNameF)
   a <- try (reserved "*" >> return WithArgs) <|> return NoArgs -- TODO: reserved "*" looks suspicious
@@ -1336,7 +1336,7 @@ hmeasureP = do
    do b <- locBinderLHNameP
       popLayout >> popLayout >> return (HMeas b)
 
-iMeasureP :: Parser (MeasureV LocSymbol (Located BareTypeParsed) (Located LHName))
+iMeasureP :: Parser (MeasureV LocSymbol (Located BareTypeParsed) (Located LHUnresolved))
 iMeasureP = do
   (x, ty) <- indentedLine tyBindP
   _ <- optional semi
@@ -1382,7 +1382,7 @@ instanceP
     mkVar v  = dummyLoc $ RVar v (uTop F.trueReft)
 
 
-riMethodSigP :: Parser (Located LHName, RISig (Located BareTypeParsed))
+riMethodSigP :: Parser (Located LHUnresolved, RISig (Located BareTypeParsed))
 riMethodSigP
   = try (do reserved "assume"
             (x, t) <- tyBindLHNameP
@@ -1428,15 +1428,15 @@ locBinderP :: Parser (Located Symbol)
 locBinderP =
   located binderP -- TODO
 
-locBinderLogicNameP :: Parser (Located LHName)
+locBinderLogicNameP :: Parser (Located LHUnresolved)
 locBinderLogicNameP =
   fmap (makeUnresolvedLHName LHLogicNameBinder) <$> located binderP
 
-locBinderLHNameP :: Parser (Located LHName)
+locBinderLHNameP :: Parser (Located LHUnresolved)
 locBinderLHNameP =
   located $ makeUnresolvedLHName (LHVarName LHAnyModuleNameF) <$> binderP
 
-locBinderThisModuleLHNameP :: Parser (Located LHName)
+locBinderThisModuleLHNameP :: Parser (Located LHUnresolved)
 locBinderThisModuleLHNameP =
   located $ makeUnresolvedLHName (LHVarName LHThisModuleNameF) <$> binderP
 
@@ -1461,7 +1461,7 @@ binderP =
   -- Note: It is important that we do *not* use the LH/fixpoint reserved words here,
   -- because, for example, we must be able to use "assert" as an identifier.
 
-measureDefP :: LHNameSpace -> Parser (BodyV LocSymbol) -> Parser (DefV LocSymbol (Located BareTypeParsed) (Located LHName))
+measureDefP :: LHNameSpace -> Parser (BodyV LocSymbol) -> Parser (DefV LocSymbol (Located BareTypeParsed) (Located LHUnresolved))
 measureDefP ns bodyP
   = do mname   <- fmap (makeUnresolvedLHName ns) <$> locSymbolP
        (c, xs) <- measurePatP
@@ -1470,44 +1470,44 @@ measureDefP ns bodyP
        let xs'  = symbol . val <$> xs
        return   $ Def mname c Nothing ((, Nothing) <$> xs') body
 
-measurePatP :: Parser (Located LHName, [LocSymbol])
+measurePatP :: Parser (Located LHUnresolved, [LocSymbol])
 measurePatP
   =  parens (try conPatP <|> try consPatP <|> nilPatP <|> tupPatP)
  <|> nullaryConPatP
  <?> "measurePatP"
 
-tupPatP :: Parser (Located LHName, [Located Symbol])
+tupPatP :: Parser (Located LHUnresolved, [Located Symbol])
 tupPatP  = mkTupPat  <$> located (sepBy1 locLowerIdP comma)
 
-conPatP :: Parser (Located LHName, [Located Symbol])
+conPatP :: Parser (Located LHUnresolved, [Located Symbol])
 conPatP  = (,)       <$> dataConLHNameP <*> many locLowerIdP
 
-consPatP :: Parser (Located LHName, [Located Symbol])
+consPatP :: Parser (Located LHUnresolved, [Located Symbol])
 consPatP = mkConsPat <$> locLowerIdP  <*> located (reservedOp ":") <*> locLowerIdP
 
-nilPatP :: Parser (Located LHName, [t])
+nilPatP :: Parser (Located LHUnresolved, [t])
 nilPatP  = mkNilPat  <$> located (brackets (pure ()))
 
-nullaryConPatP :: Parser (Located LHName, [t])
+nullaryConPatP :: Parser (Located LHUnresolved, [t])
 nullaryConPatP = nilPatP <|> ((,[]) <$> dataConLHNameP)
                  <?> "nullaryConPatP"
 
-mkTupPat :: Foldable t => Located (t a) -> (Located LHName, t a)
+mkTupPat :: Foldable t => Located (t a) -> (Located LHUnresolved, t a)
 mkTupPat lzs =
     let tupledDC = GHC.tupleDataCon GHC.Boxed (length (val lzs))
      in (makeGHCLHName (GHC.getName tupledDC) (symbol tupledDC) <$ lzs, val lzs)
 
-mkNilPat :: Located t -> (Located LHName, [t1])
+mkNilPat :: Located t -> (Located LHUnresolved, [t1])
 mkNilPat lx     = (makeGHCLHName (GHC.getName GHC.nilDataCon) (symbol GHC.nilDataCon) <$ lx, [])
 
-mkConsPat :: t1 -> Located t -> t1 -> (Located LHName, [t1])
+mkConsPat :: t1 -> Located t -> t1 -> (Located LHUnresolved, [t1])
 mkConsPat x lc y = (makeGHCLHName (GHC.getName GHC.consDataCon) (symbol GHC.consDataCon) <$ lc, [x, y])
 
 -------------------------------------------------------------------------------
 --------------------------------- Predicates ----------------------------------
 -------------------------------------------------------------------------------
 
-dataConFieldsP :: Parser [(LHName, BareTypeParsed)]
+dataConFieldsP :: Parser [(LHUnresolved, BareTypeParsed)]
 dataConFieldsP
    = map (first (makeUnresolvedLHName LHLogicNameBinder)) <$>
      (explicitCommaBlock predTypeDDP -- braces (sepBy predTypeDDP comma)
@@ -1530,10 +1530,10 @@ predTypeDDP = (,) <$> bbindP <*> bareTypeP
 bbindP   :: Parser Symbol
 bbindP   = lowerIdP <* reservedOp "::"
 
-tyConBindLHNameP :: Parser (Located LHName)
+tyConBindLHNameP :: Parser (Located LHUnresolved)
 tyConBindLHNameP = locUpperIdLHNameP (LHTcName LHAnyModuleNameF)
 
-tyConThisModuleBindLHNameP :: Parser (Located LHName)
+tyConThisModuleBindLHNameP :: Parser (Located LHUnresolved)
 tyConThisModuleBindLHNameP = locUpperIdLHNameP (LHTcName LHThisModuleNameF)
 
 dataConP :: [Symbol] -> Parser DataCtorParsed
@@ -1554,7 +1554,7 @@ tRepVars as tr = case fst <$> ty_vars tr of
   [] -> as
   vs -> symbol . ty_var_value <$> vs
 
-tRepFields :: RTypeRepV v c tv r -> [(LHName, RTypeV v c tv r)]
+tRepFields :: RTypeRepV v c tv r -> [(LHUnresolved, RTypeV v c tv r)]
 tRepFields tr = zip (map (makeUnresolvedLHName LHLogicNameBinder) $ ty_binds tr) (ty_args tr)
 
 -- TODO: fix Located
@@ -1570,7 +1570,7 @@ dataConNameP
      bad c  = isSpace c || c `elem` ("(,)" :: String)
      pwr s  = symbol s
 
-dataConLHNameP :: Parser (Located LHName)
+dataConLHNameP :: Parser (Located LHUnresolved)
 dataConLHNameP = fmap (makeUnresolvedLHName (LHDataConName LHAnyModuleNameF)) <$> dataConNameP
 
 dataSizeP :: Parser (Maybe (SizeFunV LocSymbol))
@@ -1578,7 +1578,7 @@ dataSizeP
   = brackets (Just . SymSizeFun <$> located locLowerIdP)
   <|> return Nothing
 
-relationalP :: Parser (Located LHName, Located LHName, LocBareTypeParsed, LocBareTypeParsed, RelExprV LocSymbol, RelExprV LocSymbol)
+relationalP :: Parser (Located LHUnresolved, Located LHUnresolved, LocBareTypeParsed, LocBareTypeParsed, RelExprV LocSymbol, RelExprV LocSymbol)
 relationalP = do
    x <- locBinderLHNameP
    reserved "~"
