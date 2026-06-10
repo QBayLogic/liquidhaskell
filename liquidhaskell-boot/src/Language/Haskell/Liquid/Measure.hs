@@ -49,7 +49,7 @@ import           Language.Haskell.Liquid.Types.Specs
 import           Language.Haskell.Liquid.UX.Tidy
 
 
-mkM :: HasCallStack => F.Located LHName -> ty -> [DefV v ty bndr] -> MeasureKind -> UnSortedExprs -> MeasureV v ty bndr
+mkM :: (HasCallStack, Eq b, Show b) => F.Located b -> ty -> [DefBV b v ty bndr] -> MeasureKind -> UnSortedExprs -> MeasureBV b v ty bndr
 mkM name typ eqns kind u
   | all ((name ==) . measure) eqns
   = M name typ eqns kind u
@@ -193,7 +193,7 @@ mapArgumens allowTC lc t1 t2 = go xts1' xts2'
           ++ "See https://github.com/ucsd-progsys/liquidhaskell/issues/2629")
 
 -- should constructors have implicits? probably not
-defRefType :: Bool -> Type -> Def (RRType Reft) DataCon -> RRType Reft
+defRefType :: Bool -> Type -> DefBV LHName Symbol (RRType (ReftBV b v)) DataCon -> RRType (ReftBV b v)
 defRefType allowTC tdc (Def f dc mt xs body)
                     = generalize $ mkArrow as' [] xts t'
   where
@@ -214,11 +214,11 @@ stitchArgs :: (Monoid t1, PPrint a)
            => Bool
            -> SrcSpan
            -> a
-           -> [(Symbol, Maybe (RRType Reft))]
+           -> [(LHName, Maybe (RRType (ReftBV b v)))]
            -> [Type]
-           -> [(Symbol, RFInfo, RRType Reft, t1)]
+           -> [(LHName, RFInfo, RRType (ReftBV b v), t1)]
 stitchArgs allowTC sp dc allXs allTs
-  | nXs == nTs         = (g (dummySymbol, Nothing) . ofType <$> pts)
+  | nXs == nTs         = (g (wildcard, Nothing) . ofType <$> pts)
                       ++ zipWith g xs (ofType <$> ts)
   | otherwise          = panicFieldNumMismatch sp dc nXs nTs
     where
@@ -244,9 +244,9 @@ panicDataCon sp dc d
 refineWithCtorBody :: Outputable a
                    => a
                    -> F.Located LHName
-                   -> Body
-                   -> RType c tv Reft
-                   -> RType c tv Reft
+                   -> BodyBV b v
+                   -> RTypeBV b v c tv (ReftBV b v)
+                   -> RTypeBV b v c tv (ReftBV b v)
 refineWithCtorBody dc f body t =
   case stripRTypeBase t of
     Just (Reft (v, _)) ->

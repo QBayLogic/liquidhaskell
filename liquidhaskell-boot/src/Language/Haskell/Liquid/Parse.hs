@@ -877,7 +877,7 @@ dummyTyId = ""
 
 -- | The AST for a single parsed spec.
 data BPspec
-  = Meas    (MeasureV LocSymbol LocBareTypeParsed (Located LHUnresolved)) -- ^ 'measure' definition
+  = Meas    (MeasureBV LHUnresolved LocSymbol LocBareTypeParsed (Located LHUnresolved)) -- ^ 'measure' definition
   | Assm    (Located LHUnresolved, LocBareTypeParsed)              -- ^ 'assume' signature (unchecked)
   | AssmReflect (Located LHUnresolved, Located LHUnresolved)             -- ^ 'assume reflects' signature (unchecked)
   | Asrt    (Located LHUnresolved, LocBareTypeParsed)              -- ^ 'assert' signature (checked)
@@ -910,8 +910,8 @@ data BPspec
   | ASize   (Located LHUnresolved)                              -- ^ 'autosize' annotation; automatically generate size metric for this type
   | PBound  (Bound LocBareTypeParsed (ExprV LocSymbol))   -- ^ 'bound' definition
   | Pragma  (Located String)                              -- ^ 'LIQUID' pragma, used to save configuration options in source files
-  | CMeas   (MeasureV LocSymbol LocBareTypeParsed ())     -- ^ 'class measure' definition
-  | IMeas   (MeasureV LocSymbol LocBareTypeParsed (Located LHUnresolved)) -- ^ 'instance measure' definition
+  | CMeas   (MeasureBV LHUnresolved LocSymbol LocBareTypeParsed ())     -- ^ 'class measure' definition
+  | IMeas   (MeasureBV LHUnresolved LocSymbol LocBareTypeParsed (Located LHUnresolved)) -- ^ 'instance measure' definition
   | Varia   (Located LHUnresolved, [Variance])                  -- ^ 'variance' annotations, marking type constructor params as co-, contra-, or in-variant
   | DSize   ([LocBareTypeParsed], LocSymbol)              -- ^ 'data size' annotations, generating fancy termination metric
   | BFix    ()                                            -- ^ fixity annotation
@@ -936,8 +936,8 @@ ppAsserts k lxs t mles
     ppLes (Just les) = "/" <+> pprintTidy k (fmap val . val <$> les)
 
 pprintSymbolWithParens :: LHUnresolved -> PJ.Doc
-pprintSymbolWithParens lhname =
-    case symbolString $ getLHNameSymbol lhname of
+pprintSymbolWithParens (LHNUnresolved _ name) =
+    case symbolString $ name of
       n@(c:_) | not (Char.isAlpha c) -> "(" <> PJ.text n <> ")"
       n -> PJ.text n
 
@@ -1031,7 +1031,7 @@ ppPspec k (AssmRel (lxl, lxr, tl, tr, q, p))
         <+> pprintTidy k (val lxr) <+> "::" <+> pprintTidy k (parsedToBareType <$> tr) <+> "|"
         <+> pprintTidy k (fmap val q) <+> "=>" <+> pprintTidy k (fmap val p)
 
-unLocMeasureV :: MeasureV LocSymbol LocBareTypeParsed v -> MeasureV Symbol LocBareType v
+unLocMeasureV :: MeasureBV b LocSymbol LocBareTypeParsed v -> MeasureBV b Symbol LocBareType v
 unLocMeasureV = mapMeasureV val . mapMeasureTy (fmap parsedToBareType)
 
 -- | For debugging
@@ -1077,7 +1077,7 @@ unLocMeasureV = mapMeasureV val . mapMeasureTy (fmap parsedToBareType)
 -- signatues) are being qualified, i.e., the binding occurrences are prefixed
 -- with the module name.
 --
-mkSpec :: [BPspec] -> Measure.Spec LocSymbol BareTypeParsed
+mkSpec :: [BPspec] -> Measure.Spec LHUnresolved LocSymbol BareTypeParsed
 mkSpec xs = Measure.Spec
   { Measure.measures   = [m | Meas   m <- xs]
   , Measure.asmSigs    = [a | Assm   a <- xs]
@@ -1336,7 +1336,7 @@ hmeasureP = do
    do b <- locBinderLHNameP
       popLayout >> popLayout >> return (HMeas b)
 
-iMeasureP :: Parser (MeasureV LocSymbol (Located BareTypeParsed) (Located LHUnresolved))
+iMeasureP :: Parser (MeasureBV LHUnresolved LocSymbol (Located BareTypeParsed) (Located LHUnresolved))
 iMeasureP = do
   (x, ty) <- indentedLine tyBindP
   _ <- optional semi
@@ -1344,7 +1344,7 @@ iMeasureP = do
   return   $ Measure.mkM (makeUnresolvedLHName LHLogicName <$> x) ty eqns MsMeasure mempty
 
 -- | class measure
-cMeasureP :: Parser (MeasureV LocSymbol (Located BareTypeParsed) ())
+cMeasureP :: Parser (MeasureBV LHUnresolved LocSymbol (Located BareTypeParsed) ())
 cMeasureP
   = do (x, ty) <- tyBindLogicNameP
        return $ Measure.mkM x ty [] MsClass mempty
@@ -1461,7 +1461,7 @@ binderP =
   -- Note: It is important that we do *not* use the LH/fixpoint reserved words here,
   -- because, for example, we must be able to use "assert" as an identifier.
 
-measureDefP :: LHNameSpace -> Parser (BodyV LocSymbol) -> Parser (DefV LocSymbol (Located BareTypeParsed) (Located LHUnresolved))
+measureDefP :: LHNameSpace -> Parser (BodyV LocSymbol) -> Parser (DefBV LHUnresolved LocSymbol (Located BareTypeParsed) (Located LHUnresolved))
 measureDefP ns bodyP
   = do mname   <- fmap (makeUnresolvedLHName ns) <$> locSymbolP
        (c, xs) <- measurePatP
@@ -1495,13 +1495,13 @@ nullaryConPatP = nilPatP <|> ((,[]) <$> dataConLHNameP)
 mkTupPat :: Foldable t => Located (t a) -> (Located LHUnresolved, t a)
 mkTupPat lzs =
     let tupledDC = GHC.tupleDataCon GHC.Boxed (length (val lzs))
-     in (makeGHCLHName (GHC.getName tupledDC) (symbol tupledDC) <$ lzs, val lzs)
+     in (makeUnresolvedGHC (GHC.getName tupledDC) <$ lzs, val lzs)
 
 mkNilPat :: Located t -> (Located LHUnresolved, [t1])
-mkNilPat lx     = (makeGHCLHName (GHC.getName GHC.nilDataCon) (symbol GHC.nilDataCon) <$ lx, [])
+mkNilPat lx     = (makeUnresolvedGHC (GHC.getName GHC.nilDataCon) <$ lx, [])
 
 mkConsPat :: t1 -> Located t -> t1 -> (Located LHUnresolved, [t1])
-mkConsPat x lc y = (makeGHCLHName (GHC.getName GHC.consDataCon) (symbol GHC.consDataCon) <$ lc, [x, y])
+mkConsPat x lc y = (makeUnresolvedGHC (GHC.getName GHC.consDataCon) <$ lc, [x, y])
 
 -------------------------------------------------------------------------------
 --------------------------------- Predicates ----------------------------------

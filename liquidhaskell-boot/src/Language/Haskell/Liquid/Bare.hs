@@ -488,7 +488,7 @@ makeTyConEmbeds env spec
     where
       symTc = Mb.maybeToList . Just . Bare.lookupGhcTyConLHName env
 
-lhnameRTA :: Monad m => RTAliasB Symbol v tv a -> Bare.LookupT m (RTAliasB LHName v tv a)
+lhnameRTA :: Monad m => RTAliasB Symbol tv a -> Bare.LookupT m (RTAliasB LHName tv a)
 lhnameRTA rta@RTA{ rtName } = do
   rtName' <- traverse makeGeneratedLogicLHName rtName
   return rta { rtName = rtName' }

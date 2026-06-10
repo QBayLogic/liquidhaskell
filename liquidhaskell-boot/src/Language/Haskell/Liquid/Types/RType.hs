@@ -1,3 +1,4 @@
+{-# LANGUAGE DefaultSignatures          #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DeriveTraversable          #-}
@@ -43,6 +44,7 @@ module Language.Haskell.Liquid.Types.RType (
 
   -- * Classes describing operations on `RTypes`
   , TyConable (..)
+  , CompatibleBinder(..)
 
   -- * Type Variables
   , RTVar (..), RTVInfo (..)
@@ -87,14 +89,14 @@ module Language.Haskell.Liquid.Types.RType (
   -- * Pre-instantiated RType
   , RRType, RRProp
   , BRType, BRProp, BRPropV
-  , BSort, BSortV, BPVar
+  , BSort, BSortV, BSortBV, BPVar
   , RTVU, PVU
 
   -- * Instantiated RType
   , BareType
   , BareTypeLHName
   , BareTypeParsed
-  , BareTypeV
+  , BareTypeV, BareTypeBV
   , SpecType, SpecProp, SpecRTVar
   , LocBareType
   , LocBareTypeLHName
@@ -372,11 +374,11 @@ newtype PredicateBV b v = Pr [UsedPVarBV b v]
   deriving (Generic, Data)
   deriving (B.Binary, Hashable) via Generically (PredicateBV b v)
 
-mapPredicateV :: (v -> v') -> PredicateV v -> PredicateV v'
+mapPredicateV :: (v -> v') -> PredicateBV b v -> PredicateBV b v'
 mapPredicateV f (Pr xs) = Pr (map (mapPVarV f (const ())) xs)
 
 -- | A map traversal that collects the local variables in scope
-emapPredicateVM :: Monad m => ([Symbol] -> v -> m v') -> PredicateV v -> m (PredicateV v')
+emapPredicateVM :: (Monad m, Hashable b) => ([b] -> v -> m v') -> PredicateBV b v -> m (PredicateBV b v')
 emapPredicateVM f (Pr xs) = Pr <$> mapM (emapPVarVM f (\_ _ -> pure ())) xs
 
 instance (Ord b, Ord v) => Eq (PredicateBV b v) where
@@ -454,6 +456,18 @@ instance F.Symbolic BTyVar where
 
 instance F.Symbolic RTyVar where
   symbol (RTV tv) = F.symbol tv -- tyVarUniqueSymbol tv
+
+-- | Highly temporary class as a compatability layer to express that a binder,
+-- especially type variables @tv@, are in the same namespace as another binder.
+class CompatibleBinder b b' where
+  coerceBinder :: b' -> b
+  default coerceBinder :: b ~ b' => b' -> b
+  coerceBinder = id
+
+instance CompatibleBinder Symbol Symbol
+instance CompatibleBinder (F.Located Symbol) (F.Located Symbol)
+instance CompatibleBinder Symbol (F.Located Symbol) where
+  coerceBinder (F.Loc _ _ s) = s
 
 instance CompatibleBinder (F.Located Symbol) BTyVar where
   coerceBinder (BTV tv) = tv
@@ -608,17 +622,21 @@ instance TyConable F.LocSymbol where
 instance TyConable BTyCon where
   isFun b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> isFun s
+    LHUGHC n -> n == Ghc.fUNTyConName
 
   isList b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> isList s
+    LHUGHC n -> n == Ghc.listTyConName
 
   isTuple b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> isTuple s
+    LHUGHC n -> Ghc.isTupleTyConName n
 
   isClass = isClassBTyCon
 
   ppTycon b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> ppTycon s
+    LHUGHC name -> text $ showPpr name
 
 instance Eq RTyCon where
   x == y = rtc_tc x == rtc_tc y
@@ -635,6 +653,7 @@ instance F.Fixpoint RTyCon where
 instance F.Fixpoint BTyCon where
   toFix b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> text $ F.symbolString s
+    LHUGHC name -> text $ showPpr name
 
 instance F.PPrint RTyCon where
   pprintTidy k c
@@ -647,6 +666,7 @@ instance F.PPrint RTyCon where
 instance F.PPrint BTyCon where
   pprintTidy _ b = case F.val (btc_tc b) of
     LHNUnresolved _ s -> text $ F.symbolString s
+    LHUGHC name -> text $ showPpr name
 
 instance F.PPrint v => F.PPrint (RTVar v s) where
   pprintTidy k (RTVar x _) = F.pprintTidy k x
@@ -861,12 +881,12 @@ data UReftBV b v r = MkUReft
   deriving (Eq, Generic, Data, Functor, Foldable, Traversable)
   deriving (B.Binary, Hashable) via Generically (UReftBV b v r)
 
-mapUReftV :: (v -> v') -> (r -> r') -> UReftV v r -> UReftV v' r'
+mapUReftV :: (v -> v') -> (r -> r') -> UReftBV b v r -> UReftBV b v' r'
 mapUReftV f g (MkUReft r p) = MkUReft (g r) (mapPredicateV f p)
 
 emapUReftVM
-  :: Monad m
-  => ([Symbol] -> v -> m v') -> (r -> m r') -> UReftV v r -> m (UReftV v' r')
+  :: (Monad m, Hashable b)
+  => ([b] -> v -> m v') -> (r -> m r') -> UReftBV b v r -> m (UReftBV b v' r')
 emapUReftVM f g (MkUReft r p) = MkUReft <$> g r <*> emapPredicateVM f p
 
 type NoReft = NoReftB Symbol
@@ -893,11 +913,14 @@ instance Semigroup (NoReftB b) where
 instance Monoid (NoReftB b) where
   mempty = NoReft
 
-type BRType      = RTypeV Symbol BTyCon BTyVar    -- ^ "Bare" parsed version
-type BRTypeV v   = RTypeV v      BTyCon BTyVar    -- ^ "Bare" parsed version
+type BRType      = BRTypeV Symbol
+type BRTypeV v   = BRTypeBV LHUnresolved v
+type BRTypeBV b v = RTypeBV b v  BTyCon BTyVar
+type BSort       = BSortV Symbol
+type BSortV v    = BSortBV LHUnresolved v
+type BSortBV b v = BRTypeBV b v (NoReftB b)
+
 type RRType      = RTypeV Symbol RTyCon RTyVar    -- ^ "Resolved" version
-type BSort       = BRType    NoReft
-type BSortV v    = BRTypeV v NoReft
 type RSort       = RRType    NoReft
 type BPVar       = PVar      BSort
 type RPVar       = PVar      RSort
@@ -908,6 +931,7 @@ type BareType    = BareTypeV F.Symbol
 type BareTypeParsed = BareTypeV F.LocSymbol
 type BareTypeLHName = BareTypeV LHName
 type BareTypeV v = BRTypeV v (RReftV v)
+type BareTypeBV b v = BRTypeBV b v (RReftBV b v)
 type SpecType    = RRType    RReft
 type SpecProp    = RRProp    RReft
 type RRProp r    = Ref       RSort (RRType r)
@@ -933,7 +957,7 @@ instance Show RTyVar where
 instance F.PPrint (UReft r) => Show (UReft r) where
   show = F.showpp
 
-instance F.PPrint (RType c tv r) => Show (RType c tv r) where
+instance F.PPrint (RTypeBV b v c tv r) => Show (RTypeBV b v c tv r) where
   show = F.showpp
 
 instance F.PPrint (RTProp c tv r) => Show (RTProp c tv r) where
@@ -1129,3 +1153,8 @@ instance PredicateCompat Symbol F.LocSymbol where
   pappV _ n = F.dummyLoc $ F.symbol $ "papp" ++ show n
   pnameV p = F.dummyLoc $ pname p
   pargV p = F.dummyLoc $ parg p
+
+instance PredicateCompat LHUnresolved F.Symbol where
+  pappV _ = pappV (Proxy :: Proxy Symbol)
+  pnameV = F.symbol . pname
+  pargV = F.symbol . parg

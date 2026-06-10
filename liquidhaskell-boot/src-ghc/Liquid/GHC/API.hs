@@ -221,6 +221,7 @@ import GHC.Builtin.Types              as Ghc
     )
 import GHC.Builtin.Types.Prim         as Ghc
     ( isArrowTyCon
+    , fUNTyConName
     , eqPrimTyCon
     , eqReprPrimTyCon
     , primTyCons

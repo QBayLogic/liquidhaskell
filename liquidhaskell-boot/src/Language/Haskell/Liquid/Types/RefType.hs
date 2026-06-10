@@ -46,10 +46,9 @@ module Language.Haskell.Liquid.Types.RefType (
   , quantifyFreeRTy
 
   -- * RType constructors
-  , ofType, toType, bareOfType
+  , ofType, toType
   , bTyVar, rTyVar, rVar, rApp, gApp, rEx
   , symbolRTyVar, bareRTyVar
-  , tyConBTyCon
   , pdVarReft
 
   -- * Substitutions
@@ -415,12 +414,6 @@ updateRTVar (RTVar (RTV a) _) = RTVar (RTV a) (rTVarInfo a)
 rTVar :: IsReft r => TyVar -> RTVar RTyVar (RRType r)
 rTVar a = RTVar (RTV a) (rTVarInfo a)
 
-bTVar :: IsReft r => TyVar -> RTVar BTyVar (BRType r)
-bTVar a = RTVar (BTV (symbol <$> GM.locNamedThing a)) (bTVarInfo a)
-
-bTVarInfo :: IsReft r => TyVar -> RTVInfo (BRType r)
-bTVarInfo = mkTVarInfo kindToBRType
-
 rTVarInfo :: IsReft r => TyVar -> RTVInfo (RRType r)
 rTVarInfo = mkTVarInfo kindToRType
 
@@ -434,9 +427,6 @@ mkTVarInfo k2t a = RTVInfo
 
 kindToRType :: IsReft r => Type -> RRType r
 kindToRType = kindToRType_ ofType
-
-kindToBRType :: IsReft r => Type -> BRType r
-kindToBRType = kindToRType_ bareOfType
 
 kindToRType_ :: (Type -> z) -> Type -> z
 kindToRType_ ofType'       = ofType' . go
@@ -490,16 +480,6 @@ pdVarReft = (\p -> MkUReft mempty p) . pdVar
 
 tyConRTyCon :: TyCon -> RTyCon
 tyConRTyCon c = RTyCon c [] (mkTyConInfo c [] [] Nothing)
-
--- bApp :: (Monoid r) => TyCon -> [BRType r] -> BRType r
-bApp :: TyCon -> [BRType r] -> [BRProp r] -> r -> BRType r
-bApp c = RApp (tyConBTyCon c)
-
-tyConBTyCon :: TyCon -> BTyCon
-tyConBTyCon tc =
-  mkBTyCon $
-    makeResolvedLHName (LHRGHC (getName tc)) . tyConName <$> GM.locNamedThing tc
-
 
 --- NV TODO : remove this code!!!
 
@@ -868,7 +848,7 @@ addNumSizeFun c
   = c {rtc_info = (rtc_info c) {sizeFunction = Just IdSizeFun } }
 
 
-generalize :: (Eq tv, Monoid r) => RType c tv r -> RType c tv r
+generalize :: (Eq tv, Monoid r) => RTypeBV b v c tv r -> RTypeBV b v c tv r
 generalize t = mkUnivs (map (, mempty) (freeTyVars t)) [] t
 
 allTyVars :: (Ord tv) => RType c tv r -> [tv]
@@ -881,7 +861,7 @@ allTyVars' t = fmap ty_var_value $ vs ++ vs'
     vs'     = freeTyVars t
 
 
-freeTyVars :: Eq tv => RTypeV v c tv r -> [RTVar tv (RTypeV v c tv NoReft)]
+freeTyVars :: Eq tv => RTypeBV b v c tv r -> [RTVar tv (RTypeBV b v c tv (NoReftB b))]
 freeTyVars (RAllP _ t)       = freeTyVars t
 freeTyVars (RAllT α t _)     = freeTyVars t L.\\ [α]
 freeTyVars (RFun _ _ t t' _) = freeTyVars t `L.union` freeTyVars t'
@@ -1203,7 +1183,7 @@ instance SubsTy Symbol Symbol (BRType r) where
   subt su (RRTy e r o t)    = RRTy [(x, subt su p) | (x,p) <- e] r o (subt su t)
   subt _ (RHole r)          = RHole r
 
-instance SubsTy Symbol Symbol (RTProp BTyCon BTyVar r) where
+instance SubsTy Symbol Symbol (RTPropBV b v BTyCon BTyVar r) where
   subt su (RProp e t) =  RProp [(x, subt su xt) | (x,xt) <- e] (subt su t)
 
 
@@ -1280,10 +1260,10 @@ instance (SubsTy tv ty r) => SubsTy tv ty (UReft r) where
   subt su r = r {ur_reft = subt su $ ur_reft r}
 
 -- Here the "String" is a Bare-TyCon. TODO: wrap in newtype
-instance SubsTy BTyVar BSort BTyCon where
+instance SubsTy BTyVar (BSortBV b v) BTyCon where
   subt _ t = t
 
-instance SubsTy BTyVar BSort BSort where
+instance SubsTy BTyVar (BSortBV b v) (BSortBV b v) where
   subt (α, τ) = subsTyVarMeet (α, τ, ofRSort τ)
 
 instance (SubsTy tv ty (UReft r), SubsTy tv ty (RType c tv NoReft)) => SubsTy tv ty (RTProp c tv (UReft r))  where
@@ -1304,16 +1284,6 @@ ofType      = ofType_ $ TyConv
   , tcFTVar = rTVar
   , tcFApp  = \c ts -> rApp c ts [] trueReft
   , tcFLit  = ofLitType rApp
-  }
-
---------------------------------------------------------------------------------
-bareOfType :: IsReft r => Type -> BRType r
---------------------------------------------------------------------------------
-bareOfType  = ofType_ $ TyConv
-  { tcFVar  = (`RVar` trueReft) . BTV . fmap symbol . GM.locNamedThing
-  , tcFTVar = bTVar
-  , tcFApp  = \c ts -> bApp c ts [] trueReft
-  , tcFLit  = ofLitType bApp
   }
 
 --------------------------------------------------------------------------------
@@ -1558,7 +1528,7 @@ shiftVV t _
 -- MOVE TO TYPES
 instance (Show tv, Show ty) => Show (RTAlias tv ty) where
   show (RTA n as xs t) =
-    printf "type %s %s %s = %s" (symbolString . getLHNameSymbol . val $ n)
+    printf "type %s %s %s = %s" (symbolString . symbol . val $ n)
       (unwords (show <$> as))
       (unwords (show <$> xs))
       (show t)

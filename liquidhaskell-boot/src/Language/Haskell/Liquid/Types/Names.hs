@@ -15,8 +15,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 module Language.Haskell.Liquid.Types.Names
-  ( CompatibleBinder(..)
-  , lenLocSymbol
+  ( lenLocSymbol
   , anyTypeSymbol
   , propSymbol
   , getPropIndex
@@ -47,6 +46,7 @@ module Language.Haskell.Liquid.Types.Names
   , makeLogicLHName
   , makeGeneratedLogicLHName
   , makeUnresolvedLHName
+  , makeUnresolvedGHC
   , mapLHNames
   , mapMLHNames
   , mapMLocLHNames
@@ -74,8 +74,9 @@ import GHC.Show
 import GHC.Stack
 import GHC.Types (Any)
 import Language.Fixpoint.Types
-import Language.Haskell.Liquid.GHC.Misc ( locNamedThing ) -- Symbolic GHC.Name
+import Language.Haskell.Liquid.GHC.Misc ( locNamedThing, showPpr ) -- Symbolic GHC.Name
 import Text.Read (readMaybe)
+import Text.PrettyPrint.HughesPJ (text)
 import qualified Liquid.GHC.API as GHC
 import Language.Haskell.TH.Syntax (Quote, Exp, Lift (..), unsafeCodeCoerce)
 
@@ -89,18 +90,6 @@ getPropIndex (Reft (v, PAtom Eq (EApp (EVar n) (EVar v')) idx))
   , v == v'
   = Just idx
 getPropIndex _ = Nothing
-
--- | Highly temporary class as a compatability layer to express that a binder,
--- especially type variables @tv@, are in the same namespace as another binder.
-class CompatibleBinder b b' where
-  coerceBinder :: b' -> b
-  default coerceBinder :: b ~ b' => b' -> b
-  coerceBinder = id
-
-instance CompatibleBinder Symbol Symbol
-instance CompatibleBinder (Located Symbol) (Located Symbol)
-instance CompatibleBinder Symbol (Located Symbol) where
-  coerceBinder (Loc _ _ s) = s
 
 -- RJ: Please add docs
 lenLocSymbol :: Located Symbol
@@ -257,10 +246,11 @@ data LHName
       LHNResolved !LHResolvedName !Symbol
   deriving (Data, Generic)
 
+-- | A name that is potentially unresolved.
 data LHUnresolved
     = LHNUnresolved !LHNameSpace !Symbol
+    | LHUGHC !GHC.Name
   deriving (Data, Generic, Eq, Ord)
-  deriving anyclass (Hashable, NFData, B.Binary)
 
 instance Lift LHName where
   liftTyped = unsafeCodeCoerce . lift
@@ -281,6 +271,12 @@ instance Ord LHName where
 -- | A Hashable instance that ignores the Symbol in resolved names
 instance Hashable LHName where
   hashWithSalt s (LHNResolved n _) = hashWithSalt s n
+
+instance Hashable LHUnresolved where
+  hashWithSalt s (LHNUnresolved ns sym) =
+    s `hashWithSalt` (0::Int) `hashWithSalt` ns `hashWithSalt` sym
+  hashWithSalt s (LHUGHC name) =
+    s `hashWithSalt` (1::Int) `hashWithSalt` GHC.getKey (GHC.nameUnique name)
 
 data LHNameSpace
     = LHTcName LHThisModuleNameFlag       -- ^ Type constructors
@@ -312,6 +308,9 @@ instance Ord LogicName where
   compare GeneratedLogicName{} LogicName{} = GT
   compare (GeneratedLogicName s1 _) (GeneratedLogicName s2 _) = compare s1 s2
 
+instance Binder LHUnresolved where
+  wildcard = LHNUnresolved LHLogicName "_"
+
 instance Show LHName where
   showsPrec d n0 = showParen (d > app_prec) $ case n0 of
       LHNResolved n s ->
@@ -329,6 +328,9 @@ instance Show LHUnresolved where
         showsPrec (app_prec + 1) ns .
         showSpace .
         showsPrec (app_prec + 1) s
+      LHUGHC n1 ->
+        showString "LHUGHC " .
+        showString (GHC.showPprDebug n1)
     where
       app_prec = 10
 
@@ -362,6 +364,7 @@ instance Show LogicName where
         Just n -> showParen True $ showString "Just " . showString (GHC.showPprDebug n)
 
 instance NFData LHName
+instance NFData LHUnresolved
 instance NFData LHResolvedName
 instance NFData LogicName
 
@@ -392,6 +395,11 @@ instance B.Binary LHResolvedName where
   put (LHRLocal s _) = B.putWord8 0 >> B.put (symbolString s)
   put (LHRIndex n) = B.putWord8 1 >> B.put n
 
+instance B.Binary LHUnresolved where
+  get = LHNUnresolved <$> B.get <*> B.get
+  put (LHNUnresolved ns n) = B.put ns >> B.put n
+  put (LHUGHC _) = error "cannot serialize LHUGHC"
+
 instance GHC.Binary LHResolvedName where
   get bh = do
     tag <- GHC.getByte bh
@@ -421,6 +429,10 @@ instance GHC.Binary LogicName where
 
 instance PPrint LHName where
   pprintTidy _ = pprint . getLHNameSymbol
+
+instance PPrint LHUnresolved where
+  pprintTidy _ (LHNUnresolved _ name) = pprint name
+  pprintTidy _ (LHUGHC name) = text $ showPpr name
 
 makeResolvedLHName :: LHResolvedName -> Symbol -> LHName
 makeResolvedLHName = LHNResolved
@@ -465,12 +477,19 @@ makeGHCLHNameLocatedFromId x =
 makeUnresolvedLHName :: LHNameSpace -> Symbol -> LHUnresolved
 makeUnresolvedLHName = LHNUnresolved
 
+makeUnresolvedGHC :: GHC.Name -> LHUnresolved
+makeUnresolvedGHC = LHUGHC
+
 -- | Get the unresolved Symbol from an LHName.
 getLHNameSymbol :: LHName -> Symbol
 getLHNameSymbol (LHNResolved _ s) = s
 
 instance Symbolic LHName where
   symbol = getLHNameSymbol
+
+instance Symbolic LHUnresolved where
+  symbol (LHNUnresolved _ s) = s
+  symbol (LHUGHC name) = symbol name
 
 -- | Get the resolved Symbol from an LHName.
 getLHNameResolved :: HasCallStack => LHName -> LHResolvedName

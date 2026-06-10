@@ -115,6 +115,7 @@ library
                       Language.Haskell.Liquid.UX.Tidy
                       Language.Haskell.Liquid.WiredIn
                       Language.Haskell.Liquid.WiredIn.TH
+                      Language.Haskell.Liquid.WiredInSymbols
                       LiquidHaskellBoot
                       Paths_liquidhaskell_boot
   other-modules:      Language.Haskell.Liquid.GHC.Plugin.Serialisation

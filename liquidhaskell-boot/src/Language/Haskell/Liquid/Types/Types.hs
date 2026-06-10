@@ -47,7 +47,8 @@ module Language.Haskell.Liquid.Types.Types (
 
   -- * Relational predicates
   , RelExpr
-  , RelExprV (..)
+  , RelExprV
+  , RelExprBV (..)
 
   -- * Pre-instantiated RType
   , REnv
@@ -102,14 +103,16 @@ module Language.Haskell.Liquid.Types.Types (
 
   -- * Measures
   , Measure
-  , MeasureV (..)
+  , MeasureV
+  , MeasureBV (..)
   , UnSortedExprs, UnSortedExpr
   , MeasureKind (..)
   , CMeasure (..)
   , Def
-  , DefV (..)
+  , DefV
+  , DefBV (..)
   , Body
-  , BodyV (..)
+  , BodyBV (..)
   , MSpec (..)
   , mapDefTy
   , mapMeasureTy
@@ -216,11 +219,15 @@ data TyConMap = TyConMap
 -----------------------------------------------------------------------------
 
 type RelExpr = RelExprV F.Symbol
-data RelExprV v = ERBasic (F.ExprV v) | ERChecked (F.ExprV v) (RelExprV v) | ERUnChecked (F.ExprV v) (RelExprV v)
+type RelExprV v = RelExprBV F.Symbol v
+data RelExprBV b v
+  = ERBasic (F.ExprBV b v)
+  | ERChecked (F.ExprBV b v) (RelExprBV b v)
+  | ERUnChecked (F.ExprBV b v) (RelExprBV b v)
   deriving (Eq, Show, Data, Generic, Functor, Foldable, Traversable)
-  deriving B.Binary via Generically (RelExprV v)
+  deriving B.Binary via Generically (RelExprBV b v)
 
-emapRelExprV :: Monad m => ([Symbol] -> v0 -> m v1) -> RelExprV v0 -> m (RelExprV v1)
+emapRelExprV :: (Monad m, Hashable b) => ([b] -> v0 -> m v1) -> RelExprBV b v0 -> m (RelExprBV b v1)
 emapRelExprV f = go
   where
     go (ERBasic e) = ERBasic <$> emapExprVM f e
@@ -283,8 +290,8 @@ type LMap = LMapV F.Symbol
 instance (Show b, Ord b, Hashable b, F.Fixpoint b, Show v, Ord v, F.Fixpoint v) => Show (LMapBV b v) where
   show (LMap x xs e) = show x ++ " " ++ show xs ++ "\t |-> \t" ++ show e
 
-toLMapV :: (F.Located LHName, ([Symbol], F.ExprV v)) -> (F.Located LHName, LMapV v)
-toLMapV (x, (ys, e)) = (x, LMap {lmVar = getLHNameSymbol <$> x, lmArgs = ys, lmExpr = e})
+toLMapV :: F.Symbolic name => (F.Located name, ([Symbol], F.ExprV v)) -> (F.Located name, LMapV v)
+toLMapV (x, (ys, e)) = (x, LMap {lmVar = F.symbol <$> x, lmArgs = ys, lmExpr = e})
 
 mkLogicMap :: M.HashMap Symbol LMap -> LogicMap
 mkLogicMap ls = mempty {lmSymDefs = ls}
@@ -303,7 +310,7 @@ eAppWithMap lmap f es expr
   | otherwise
   = expr
 
-emapLMapM :: Monad m => ([Symbol] -> v0 -> m v1) -> LMapV v0 -> m (LMapV v1)
+emapLMapM :: (Monad m, Hashable b) => ([b] -> v0 -> m v1) -> LMapBV b v0 -> m (LMapBV b v1)
 emapLMapM f l = do
     lmExpr <- emapExprVM (f . (++ lmArgs l)) (lmExpr l)
     return l {lmExpr}
@@ -318,7 +325,7 @@ data RInstance t = RI
     -- Provided when resolving names
   , riDictName :: Maybe (F.Located LHName)
   , ritype  :: [t]
-  , risigs  :: [(F.Located LHName, RISig t)]
+  , risigs  :: [(F.Located LHUnresolved, RISig t)]
   } deriving (Eq, Generic, Functor, Data, Foldable, Traversable, Show)
     deriving Hashable via Generically (RInstance t)
     deriving B.Binary via Generically (RInstance t)
@@ -380,16 +387,16 @@ instance Show (Axiom Var Type CoreExpr) where
 --------------------------------------------------------------------------------
 -- | Refinement Type and Expression Aliases
 --------------------------------------------------------------------------------
-data RTAliasB b v tv a = RTA
+data RTAliasB b tv a = RTA
   { rtName  :: F.Located b        -- ^ name of the alias with its definition's location
   , rtTArgs :: [tv]               -- ^ type parameters
-  , rtVArgs :: [v]                -- ^ value parameters
+  , rtVArgs :: [b]                -- ^ value parameters
   , rtBody  :: a                  -- ^ what the alias expands to
   } deriving (Eq, Data, Generic, Functor, Foldable, Traversable)
-    deriving Hashable via Generically (RTAliasB b v tv a)
-    deriving B.Binary via Generically (RTAliasB b v tv a)
+    deriving Hashable via Generically (RTAliasB b tv a)
+    deriving B.Binary via Generically (RTAliasB b tv a)
 -- TODO support ghosts in aliases?
-type RTAlias tv a = RTAliasB LHName Symbol tv a
+type RTAlias tv a = RTAliasB LHUnresolved tv a
 
 -- | A map over a 'RTAlias' type parameters.
 mapRTAVars :: (a -> b) -> RTAlias a ty -> RTAlias b ty
@@ -400,7 +407,7 @@ mapRTAVars f rt = rt { rtTArgs = f <$> rtTArgs rt }
 -- Used when constructing 'Language.Haskell.Liquid.Types.Specs.GhcSpec'
 -- to include Haskell inlines and 'LogicMap' definitions in the alias
 -- environment for expansion. See [NOTE:EXPRESSION-ALIASES]
-lmapEAlias :: b ~ v => LMapBV b v -> RTAliasB b v Symbol (F.ExprBV b v)
+lmapEAlias :: b ~ v => LMapBV b v -> RTAliasB b Symbol (F.ExprBV b v)
 lmapEAlias (LMap v ys e) = RTA v [] ys e
 
 
@@ -604,47 +611,49 @@ instance Semigroup (RTEnv tv t) where
 -- | Measures
 --------------------------------------------------------------------------------
 type Body = BodyV F.Symbol
-data BodyV v
-  = E (F.ExprV v)          -- ^ Measure Refinement: {v | v = e }
-  | P (F.ExprV v)          -- ^ Measure Refinement: {v | (? v) <=> p }
-  | R Symbol (F.ExprV v)   -- ^ Measure Refinement: {v | p}
+type BodyV v = BodyBV F.Symbol v
+data BodyBV b v
+  = E (F.ExprBV b v)          -- ^ Measure Refinement: {v | v = e }
+  | P (F.ExprBV b v)          -- ^ Measure Refinement: {v | (? v) <=> p }
+  | R b (F.ExprBV b v)   -- ^ Measure Refinement: {v | p}
   deriving (Show, Data, Generic, Eq, Functor, Foldable, Traversable)
-  deriving B.Binary via Generically (BodyV v)
-  deriving Hashable via Generically (BodyV v)
+  deriving B.Binary via Generically (BodyBV b v)
+  deriving Hashable via Generically (BodyBV b v)
 
 emapBody
-  :: Monad m
-  => ([Symbol] -> v0 -> m v1)
-  -> BodyV v0
-  -> m (BodyV v1)
+  :: (Monad m, F.Binder b)
+  => ([b] -> v0 -> m v1)
+  -> BodyBV b v0
+  -> m (BodyBV b v1)
 emapBody f b = case b of
     E e -> E <$> emapExprVM f e
     P e -> P <$> emapExprVM f e
     R s e -> R s <$> emapExprVM (f . (s:)) e
 
 type Def ty ctor = DefV Symbol ty ctor
-data DefV v ty ctor = Def
-  { measure :: F.Located LHName
+type DefV v ty ctor = DefBV LHName v ty ctor
+data DefBV b v ty ctor = Def
+  { measure :: F.Located b
   , ctor    :: ctor
   , dsort   :: Maybe ty
-  , binds   :: [(Symbol, Maybe ty)]    -- measure binders: the ADT argument fields
-  , body    :: BodyV v
+  , binds   :: [(b, Maybe ty)]    -- measure binders: the ADT argument fields
+  , body    :: BodyBV b v
   } deriving (Show, Data, Generic, Eq, Functor, Foldable, Traversable)
-  deriving B.Binary via Generically (DefV v ty ctor)
-  deriving Hashable via Generically (DefV v ty ctor)
+  deriving B.Binary via Generically (DefBV b v ty ctor)
+  deriving Hashable via Generically (DefBV b v ty ctor)
 
 emapDefM
-  :: Monad m
-  => ([Symbol] -> v0 -> m v1)
-  -> ([Symbol] -> ty0 -> m ty1)
-  -> DefV v0 ty0 ctor -> m (DefV v1 ty1 ctor)
+  :: (Monad m, F.Binder b)
+  => ([b] -> v0 -> m v1)
+  -> ([b] -> ty0 -> m ty1)
+  -> DefBV b v0 ty0 ctor -> m (DefBV b v1 ty1 ctor)
 emapDefM vf f d = do
     dsort <- traverse (f []) (dsort d)
     binds <- snd <$> mapAccumM (\e (s, t) -> (s:e,) . (s,) <$> traverse (f e) t) [] (binds d)
     body <- emapBody (vf . (++ map fst binds)) $ body d
     return d {dsort, binds, body}
 
-mapDefTy :: (ty0 -> ty1) -> DefV v ty0 ctor -> DefV v ty1 ctor
+mapDefTy :: (ty0 -> ty1) -> DefBV b v ty0 ctor -> DefBV b v ty1 ctor
 mapDefTy f Def{..} =
     Def
       { dsort = fmap f dsort
@@ -652,7 +661,7 @@ mapDefTy f Def{..} =
       , ..
       }
 
-mapDefV :: (v -> v') -> DefV v ty ctor -> DefV v' ty ctor
+mapDefV :: (v -> v') -> DefBV b v ty ctor -> DefBV b v' ty ctor
 mapDefV f Def{..} =
     Def
       { body = fmap f body
@@ -660,28 +669,29 @@ mapDefV f Def{..} =
       }
 
 type Measure ty ctor = MeasureV Symbol ty ctor
-data MeasureV v ty ctor = M
-  { msName :: F.Located LHName
+type MeasureV v ty ctor = MeasureBV LHName v ty ctor
+data MeasureBV b v ty ctor = M
+  { msName :: F.Located b
   , msSort :: ty
-  , msEqns :: [DefV v ty ctor]
+  , msEqns :: [DefBV b v ty ctor]
   , msKind :: !MeasureKind
   , msUnSorted :: !UnSortedExprs -- potential unsorted expressions used at measure denifinitions
   } deriving (Eq, Data, Generic, Functor)
-  deriving B.Binary via Generically (MeasureV v ty ctor)
-  deriving Hashable via Generically (MeasureV v ty ctor)
+  deriving B.Binary via Generically (MeasureBV b v ty ctor)
+  deriving Hashable via Generically (MeasureBV b v ty ctor)
 
 emapMeasureM
-  :: Monad m
-  => ([Symbol] -> v0 -> m v1)
-  -> ([Symbol] -> ty0 -> m ty1)
-  -> MeasureV v0 ty0 ctor
-  -> m (MeasureV v1 ty1 ctor)
+  :: (Monad m, F.Binder b)
+  => ([b] -> v0 -> m v1)
+  -> ([b] -> ty0 -> m ty1)
+  -> MeasureBV b v0 ty0 ctor
+  -> m (MeasureBV b v1 ty1 ctor)
 emapMeasureM vf f m = do
     msSort <- f [] (msSort m)
     msEqns <- mapM (emapDefM vf f) (msEqns m)
     return m{msSort, msEqns}
 
-mapMeasureTy :: (ty0 -> ty1) -> MeasureV v ty0 ctor -> MeasureV v ty1 ctor
+mapMeasureTy :: (ty0 -> ty1) -> MeasureBV b v ty0 ctor -> MeasureBV b v ty1 ctor
 mapMeasureTy f M{..} =
     M
       { msSort = f msSort
@@ -689,7 +699,7 @@ mapMeasureTy f M{..} =
       , ..
       }
 
-mapMeasureV :: (v -> v') -> MeasureV v ty ctor -> MeasureV v' ty ctor
+mapMeasureV :: (v -> v') -> MeasureBV b v ty ctor -> MeasureBV b v' ty ctor
 mapMeasureV f M{..} =
     M
       { msEqns = map (mapDefV f) msEqns
@@ -714,13 +724,13 @@ data MeasureKind
 instance F.Loc (Measure a b) where
   srcSpan = F.srcSpan . msName
 
-instance Bifunctor (DefV v) where
+instance Bifunctor (DefBV b v) where
   -- first f  (Def m ps c s bs b) = Def m (second f <$> ps) c (f <$> s) ((second (fmap f)) <$> bs) b
   -- second f (Def m ps c s bs b) = Def m ps (f c) s bs b
   first f  (Def m c s bs b) = Def m c (f <$> s) (second (fmap f) <$> bs) b
   second f (Def m c s bs b) = Def m (f c) s bs b
 
-instance Bifoldable (DefV v) where
+instance Bifoldable (DefBV b v) where
   bifoldr f g z (Def _ c s bs _)
     = g c
     $ acc f s
@@ -729,7 +739,7 @@ instance Bifoldable (DefV v) where
    where
     acc fn = flip (foldr fn)
 
-instance Bitraversable (DefV v) where
+instance Bitraversable (DefBV b v) where
   bitraverse f g (Def m c s bs b) =
     Def
       <$> pure m
@@ -738,7 +748,7 @@ instance Bitraversable (DefV v) where
       <*> traverse (bitraverse pure (traverse f)) bs
       <*> pure b
 
-instance Bifunctor (MeasureV v) where
+instance Bifunctor (MeasureBV b v) where
   first  f (M n s es k u) = M n (f s) (first f <$> es) k u
   second f (M n s es k u) = M n s (second f <$> es)    k u
 
@@ -752,23 +762,23 @@ data CMeasure ty = CM
   , cSort :: ty
   } deriving (Data, Generic, Functor)
 
-instance (F.PPrint v, Ord v, F.Fixpoint v) => F.PPrint (BodyV v) where
+instance (F.PPrint b, F.Fixpoint b, F.Binder b, F.PPrint v, Ord v, F.Fixpoint v) => F.PPrint (BodyBV b v) where
   pprintTidy k (E e)   = F.pprintTidy k e
   pprintTidy k (P p)   = F.pprintTidy k p
   pprintTidy k (R v p) = braces (F.pprintTidy k v <+> "|" <+> F.pprintTidy k p)
 
-instance (F.PPrint a, F.PPrint v, Ord v, F.Fixpoint v) => F.PPrint (DefV v t a) where
+instance (F.PPrint b, F.Fixpoint b, F.Binder b, F.PPrint a, F.PPrint v, Ord v, F.Fixpoint v) => F.PPrint (DefBV b v t a) where
   pprintTidy k (Def m c _ bs body)
            = F.pprintTidy k m <+> cbsd <+> "=" <+> F.pprintTidy k body
     where
       cbsd = parens (F.pprintTidy k c <-> hsep (F.pprintTidy k `fmap` (fst <$> bs)))
 
-instance (F.PPrint v, Ord v, F.Fixpoint v, F.PPrint t, F.PPrint a) => F.PPrint (MeasureV v t a) where
+instance (F.PPrint b, F.Fixpoint b, F.Binder b, F.PPrint v, Ord v, F.Fixpoint v, F.PPrint t, F.PPrint a) => F.PPrint (MeasureBV b v t a) where
   pprintTidy k (M n s eqs _ _) =  F.pprintTidy k n <+> {- parens (pprintTidy k (loc n)) <+> -} "::" <+> F.pprintTidy k s
                                   $$ vcat (F.pprintTidy k `fmap` eqs)
 
 
-instance F.PPrint (MeasureV v t a) => Show (MeasureV v t a) where
+instance F.PPrint (MeasureBV b v t a) => Show (MeasureBV b v t a) where
   show = F.showpp
 
 instance F.PPrint t => F.PPrint (CMeasure t) where
@@ -778,7 +788,8 @@ instance F.PPrint (CMeasure t) => Show (CMeasure t) where
   show = F.showpp
 
 
-instance F.Subable (Measure ty ctor) where
+instance F.Binder v => F.Subable (MeasureBV v v ty ctor) where
+  type Variable (MeasureBV v v ty ctor) = v
   syms  m     = concatMap F.syms (msEqns m)
   substa f m  = m { msEqns = F.substa f  <$> msEqns m }
   substf f m  = m { msEqns = F.substf f  <$> msEqns m }
@@ -787,13 +798,16 @@ instance F.Subable (Measure ty ctor) where
   -- substf f  (M n s es _) = M n s $ F.substf f  <$> es
   -- subst  su (M n s es _) = M n s $ F.subst  su <$> es
 
-instance F.Subable (Def ty ctor) where
+instance F.Binder v => F.Subable (DefBV v v ty ctor) where
+  type Variable (DefBV v v ty ctor) = v
   syms (Def _ _ _ sb bd)  = (fst <$> sb) ++ F.syms bd
   substa f  (Def m c t b bd) = Def m c t b $ F.substa f  bd
   substf f  (Def m c t b bd) = Def m c t b $ F.substf f  bd
   subst  su (Def m c t b bd) = Def m c t b $ F.subst  su bd
 
-instance F.Subable Body where
+instance F.Binder v => F.Subable (BodyBV v v) where
+  type Variable (BodyBV v v) = v
+
   syms (E e)       = F.syms e
   syms (P e)       = F.syms e
   syms (R s e)     = s : F.syms e
@@ -822,7 +836,7 @@ data RClass ty = RClass
   { rcName    :: BTyCon
   , rcSupers  :: [ty]
   , rcTyVars  :: [BTyVar]
-  , rcMethods :: [(F.Located LHName, ty)]
+  , rcMethods :: [(F.Located LHUnresolved, ty)]
   } deriving (Eq, Show, Functor, Data, Generic, Foldable, Traversable)
     deriving B.Binary via Generically (RClass ty)
     deriving Hashable via Generically (RClass ty)
@@ -1011,18 +1025,6 @@ instance Bifunctor MSpec   where
                                     (fmap (first f) cm)
                                     (fmap (first f) im)
   second                    = fmap
-
-instance (F.PPrint t, F.PPrint a) => F.PPrint (MSpec t a) where
-  pprintTidy k =  vcat . fmap (F.pprintTidy k . snd) . M.toList . measMap
-
-instance (Show ty, Show ctor, F.PPrint ctor, F.PPrint ty) => Show (MSpec ty ctor) where
-  show (MSpec ct m cm im)
-    = "\nMSpec:\n" ++
-      "\nctorMap:\t "  ++ show ct ++
-      "\nmeasMap:\t "  ++ show m  ++
-      "\ncmeasMap:\t " ++ show cm ++
-      "\nimeas:\t "    ++ show im ++
-      "\n"
 
 instance Eq ctor => Semigroup (MSpec ty ctor) where
   MSpec c1 m1 cm1 im1 <> MSpec c2 m2 cm2 im2

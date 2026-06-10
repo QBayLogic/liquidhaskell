@@ -78,7 +78,6 @@ import           Language.Fixpoint.Types (ExprBV, Symbol)
 
 import           Language.Haskell.Liquid.Types.DataDecl
 import           Language.Haskell.Liquid.Types.Errors
-import           Language.Haskell.Liquid.Types.Names
 import           Language.Haskell.Liquid.Types.RType
 import           Language.Haskell.Liquid.Misc
 
@@ -356,7 +355,7 @@ mapRTypeVM f (RAppTy t t' r)   = RAppTy <$> mapRTypeVM f t <*> mapRTypeVM f t' <
 mapRTypeVM f (RRTy e r o t)    = RRTy <$> mapM (traverse (mapRTypeVM f)) e <*> pure r <*> pure o <*> mapRTypeVM f t
 mapRTypeVM _ (RHole r)         = return (RHole r)
 
-emapFReftM :: Monad m => ([Symbol] -> v -> m v') -> F.ReftV v -> m (F.ReftV v')
+emapFReftM :: (Monad m, Hashable b) => ([b] -> v -> m v') -> F.ReftBV b v -> m (F.ReftBV b v')
 emapFReftM f (F.Reft (v, e)) = F.reft v <$> emapExprVM (f . (v:)) e
 
 -- The first parameter corresponds to the bscope config setting
@@ -402,19 +401,19 @@ emapRefM bscp vf f γ0 (RProp ss t0) =
       <*> emapReftM bscp vf f (map fst ss ++ γ0) t0
 
 emapBareTypeVM
-  :: (Monad m, Ord v1)
+  :: (Monad m, Ord v1, F.Binder b, CompatibleBinder b tv)
   => Bool
-  -> ([Symbol] -> v1 -> m v2)
-  -> [Symbol]
-  -> BareTypeV v1
-  -> m (BareTypeV v2)
+  -> ([b] -> v1 -> m v2)
+  -> [b]
+  -> RTypeBV b v1 c tv (RReftBV b v1)
+  -> m (RTypeBV b v2 c tv (RReftBV b v2))
 emapBareTypeVM bscp f =
     emapReftM
       bscp
       f
       (\e -> emapUReftVM (f . (++ e)) (emapFReftM (f . (++ e))))
 
-mapDataDeclV :: (v -> v') -> DataDeclP v ty -> DataDeclP v' ty
+mapDataDeclV :: (v -> v') -> DataDeclP b v ty -> DataDeclP b v' ty
 mapDataDeclV f DataDecl {..} =
     DataDecl
       { tycPVars = map (mapPVarV f (mapRTypeV f)) tycPVars
@@ -422,16 +421,16 @@ mapDataDeclV f DataDecl {..} =
       , ..
       }
 
-mapDataDeclVM :: Monad m => (v -> m v') -> DataDeclP v ty -> m (DataDeclP v' ty)
+mapDataDeclVM :: (Monad m, F.Binder b, CompatibleBinder b BTyVar) => (v -> m v') -> DataDeclP b v ty -> m (DataDeclP b v' ty)
 mapDataDeclVM f = emapDataDeclM False (const f) (const pure)
 
 emapDataDeclM
-  :: Monad m
+  :: (Monad m, F.Binder b, CompatibleBinder b BTyVar)
   => Bool
-  -> ([Symbol] -> v -> m v')
-  -> ([Symbol] -> ty -> m ty')
-  -> DataDeclP v ty
-  -> m (DataDeclP v' ty')
+  -> ([b] -> v -> m v')
+  -> ([b] -> ty -> m ty')
+  -> DataDeclP b v ty
+  -> m (DataDeclP b v' ty')
 emapDataDeclM bscp vf f d = do
     tycPVars <- mapM (emapPVarVM vf (emapReftM bscp vf (const pure))) $ tycPVars d
     tycDCons <- traverse (mapM (emapDataCtorTyM f)) (tycDCons d)
@@ -441,13 +440,13 @@ emapDataDeclM bscp vf f d = do
 
 emapDataCtorTyM
   :: Monad m
-  => ([Symbol] -> ty -> m ty')
-  -> DataCtorP ty
-  -> m (DataCtorP ty')
+  => ([b] -> ty -> m ty')
+  -> DataCtorP b ty
+  -> m (DataCtorP b ty')
 emapDataCtorTyM f d = do
     dcTheta <- mapM (f []) (dcTheta d)
-    dcResult <- traverse (f (map (lhNameToUnqualifiedSymbol . fst) (dcFields d))) $ dcResult d
-    dcFields <- snd <$> mapAccumM (\γ  (s, t) -> (lhNameToUnqualifiedSymbol s:γ,) . (s,) <$> f γ t) [] (dcFields d)
+    dcResult <- traverse (f (map fst (dcFields d))) $ dcResult d
+    dcFields <- snd <$> mapAccumM (\γ  (s, t) -> (s:γ,) . (s,) <$> f γ t) [] (dcFields d)
     return d{dcTheta, dcFields, dcResult}
 
 emapExprArg :: ([b] -> ExprBV b v -> ExprBV b v) -> [b] -> RTypeBV b v c tv r -> RTypeBV b v c tv r

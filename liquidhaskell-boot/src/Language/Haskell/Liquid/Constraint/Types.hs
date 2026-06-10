@@ -70,7 +70,7 @@ import           Liquid.GHC.API    as Ghc hiding ( (<+>)
                                                                   , ($+$)
                                                                   )
 import           Language.Haskell.Liquid.Misc           (thrd3)
-import           Language.Haskell.Liquid.WiredIn        (wiredSortedSyms)
+import           Language.Haskell.Liquid.WiredInSymbols (wiredSortedSyms)
 import qualified Language.Fixpoint.Types            as F
 import           Language.Fixpoint.Misc
 

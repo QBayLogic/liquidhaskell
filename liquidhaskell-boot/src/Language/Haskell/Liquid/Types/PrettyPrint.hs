@@ -66,6 +66,7 @@ import           Language.Haskell.Liquid.GHC.Misc
 import           Language.Haskell.Liquid.Misc
 import           Language.Haskell.Liquid.Types.Errors
 import           Language.Haskell.Liquid.Types.Names (LHName (..), LHUnresolved (..), lhNameToResolvedSymbol)
+import           Language.Haskell.Liquid.WiredIn ()
 import           Language.Haskell.Liquid.Types.RType
 import           Language.Haskell.Liquid.Types.RTypeOp
 import           Language.Haskell.Liquid.Types.Types
@@ -179,6 +180,19 @@ instance F.Fixpoint LHName where
 instance F.Fixpoint LHUnresolved where
   toFix lhname = case lhname of
     LHNUnresolved _ name  -> pprintSymbol name
+    LHUGHC name -> text $ showPpr name
+
+instance (F.PPrint t, F.PPrint a) => F.PPrint (MSpec t a) where
+  pprintTidy k =  vcat . fmap (F.pprintTidy k . snd) . M.toList . measMap
+
+instance (Show ty, Show ctor, F.PPrint ctor, F.PPrint ty) => Show (MSpec ty ctor) where
+  show (MSpec ct m cm im)
+    = "\nMSpec:\n" ++
+      "\nctorMap:\t "  ++ show ct ++
+      "\nmeasMap:\t "  ++ show m  ++
+      "\ncmeasMap:\t " ++ show cm ++
+      "\nimeas:\t "    ++ show im ++
+      "\n"
 
 --------------------------------------------------------------------------------
 -- | Pretty Printing RefType ---------------------------------------------------
