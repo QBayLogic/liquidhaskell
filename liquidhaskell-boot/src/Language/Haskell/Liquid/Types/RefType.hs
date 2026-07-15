@@ -1138,24 +1138,24 @@ subsFreeRef m s (α', τ', t')  (RProp ss t)
 subts :: (SubsTy tv ty c) => [(tv, ty)] -> c -> c
 subts = flip (foldr subt)
 
-instance SubsTy RTyVar (RType RTyCon RTyVar NoReft) RTyVar where
+instance SubsTy RTyVar (RTypeBV b v RTyCon RTyVar r) RTyVar where
   subt (RTV x, t) (RTV z) | isTyVar z, tyVarKind z == TyVarTy x
     = RTV (setVarType z $ toType False t)
   subt _ v
     = v
 
-instance SubsTy RTyVar (RType RTyCon RTyVar NoReft) (RTVar RTyVar (RType RTyCon RTyVar NoReft)) where
+instance SubsTy RTyVar (RTypeBV b v RTyCon RTyVar (NoReftB b)) (RTVar RTyVar (RTypeBV b v RTyCon RTyVar (NoReftB b))) where
   -- NV TODO: update kind
   subt su rty = rty { ty_var_value = subt su $ ty_var_value rty }
 
 
-instance SubsTy BTyVar (RType c BTyVar NoReft) BTyVar where
+instance SubsTy BTyVar (RTypeBV b v c BTyVar (NoReftB b)) BTyVar where
   subt _ = id
 
-instance SubsTy BTyVar (RType c BTyVar NoReft) (RTVar BTyVar (RType c BTyVar NoReft)) where
+instance SubsTy BTyVar (RTypeBV b v c BTyVar (NoReftB b)) (RTVar BTyVar (RTypeBV b v c BTyVar (NoReftB b))) where
   subt _ = id
 
-instance SubsTy tv ty NoReft   where
+instance SubsTy tv ty (NoReftB b) where
   subt _ = id
 
 instance SubsTy tv ty Symbol where
@@ -1166,7 +1166,7 @@ instance SubsTy tv ty Symbol where
 instance (SubsTy tv ty Expr) => SubsTy tv ty Reft where
   subt su (Reft (x, e)) = Reft (x, subt su e)
 
-instance SubsTy Symbol Symbol (BRType r) where
+instance SubsTy Symbol Symbol (BRTypeBV b v r) where
   subt (x,y) (RVar (BTV v) r)
     | x == val v = RVar (BTV (y <$ v)) r
     | otherwise  = RVar (BTV v) r
@@ -1263,7 +1263,7 @@ instance (SubsTy tv ty r) => SubsTy tv ty (UReft r) where
 instance SubsTy BTyVar (BSortBV b v) BTyCon where
   subt _ t = t
 
-instance SubsTy BTyVar (BSortBV b v) (BSortBV b v) where
+instance Binder b => SubsTy BTyVar (BSortBV b v) (BSortBV b v) where
   subt (α, τ) = subsTyVarMeet (α, τ, ofRSort τ)
 
 instance (SubsTy tv ty (UReft r), SubsTy tv ty (RType c tv NoReft)) => SubsTy tv ty (RTProp c tv (UReft r))  where
@@ -1388,7 +1388,7 @@ type ToTypeable r = (IsReft r, ReftBind r ~ Symbol, ReftVar r ~ Symbol, PPrint r
 
 -- TODO: remove toType, generalize typeSort
 -- YL: really should take a type-level Bool
-toType  :: (ToTypeable r) => Bool -> RRType r -> Type
+toType  :: Bool -> RTypeBV b v RTyCon RTyVar r -> Type
 toType useRFInfo (RFun _ RFInfo{permitTC = permitTC} t@(RApp c _ _ _) t' _)
   | useRFInfo && isErasable c = toType useRFInfo t'
   | otherwise
@@ -1412,8 +1412,8 @@ toType useRFInfo (RAppTy t (RExprArg _) _)
   = toType useRFInfo t
 toType useRFInfo (RAppTy t t' _)
   = AppTy (toType useRFInfo t) (toType useRFInfo t')
-toType _ t@(RExprArg _)
-  = impossible Nothing $ "CANNOT HAPPEN: RefType.toType called with: " ++ showpp t
+toType _ (RExprArg _)
+  = impossible Nothing $ "CANNOT HAPPEN: RefType.toType called with RExprArg"
 toType useRFInfo (RRTy _ _ _ t)
   = toType useRFInfo t
 toType _ (RHole _)

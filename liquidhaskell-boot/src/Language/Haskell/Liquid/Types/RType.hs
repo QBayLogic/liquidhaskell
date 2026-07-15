@@ -87,8 +87,8 @@ module Language.Haskell.Liquid.Types.RType (
   , TyConP   (..)
 
   -- * Pre-instantiated RType
-  , RRType, RRProp
-  , BRType, BRProp, BRPropV
+  , RRType, RRProp, RExpr
+  , BRType, BRTypeV, BRTypeBV, BRProp, BRPropV, BRPropBV
   , BSort, BSortV, BSortBV, BPVar
   , RTVU, PVU
 
@@ -105,7 +105,9 @@ module Language.Haskell.Liquid.Types.RType (
   , RSort
   , UsedPVar
   , UsedPVarV
+  , UsedPVarBV
   , RPVar, RReft, RReftV, RReftBV
+  , BReft, BReftV, BReftBV
 
   -- * Printer Configuration
   , PPEnv (..)
@@ -388,7 +390,7 @@ instance (Ord b, Ord v) => Eq (PredicateBV b v) where
           vs' = L.sort vs
           ws' = L.sort ws
 
-instance NFData Predicate where
+instance (NFData b, NFData v) => NFData (PredicateBV b v) where
   rnf _ = ()
 
 instance Monoid Predicate where
@@ -434,7 +436,7 @@ instance Hashable v => F.Subable (PredicateBV v v) where
   substf f (Pr pvs) = Pr (F.substf f <$> pvs)
   substa f (Pr pvs) = Pr (F.substa f <$> pvs)
 
-instance NFData r => NFData (UReft r)
+instance (NFData b, NFData v, NFData r) => NFData (UReftBV b v r)
 
 newtype BTyVar = BTV F.LocSymbol
   deriving (Show, Generic, Data)
@@ -796,12 +798,12 @@ data RTypeBV b v c tv r
   deriving (Eq, Generic, Data, Functor, Foldable, Traversable)
   deriving (B.Binary, Hashable) via Generically (RTypeBV b v c tv r)
 
-instance (NFData c, NFData tv, NFData r)       => NFData (RType c tv r)
+instance (NFData b, NFData v, NFData c, NFData tv, NFData r)       => NFData (RTypeBV b v c tv r)
 
 makeRTVar :: tv -> RTVar tv s
 makeRTVar a = RTVar a (RTVNoInfo True)
 
-notExprArg :: RTypeV v c tv r -> Bool
+notExprArg :: RTypeBV b v c tv r -> Bool
 notExprArg (RExprArg _) = False
 notExprArg _            = True
 
@@ -861,7 +863,7 @@ data RefB b τ t = RProp
   } deriving (Eq, Generic, Data, Functor, Foldable, Traversable)
     deriving (B.Binary, Hashable) via Generically (RefB b τ t)
 
-instance (NFData τ,   NFData t)   => NFData   (Ref τ t)
+instance (NFData b, NFData τ, NFData t) => NFData (RefB b τ t)
 
 rPropP :: [(b, τ)] -> r -> RefB b τ (RTypeV v c tv r)
 rPropP τ r = RProp τ (RHole r)
@@ -919,33 +921,37 @@ type BRTypeBV b v = RTypeBV b v  BTyCon BTyVar
 type BSort       = BSortV Symbol
 type BSortV v    = BSortBV LHUnresolved v
 type BSortBV b v = BRTypeBV b v (NoReftB b)
-
-type RRType      = RTypeV Symbol RTyCon RTyVar    -- ^ "Resolved" version
-type RSort       = RRType    NoReft
+type BReft       = BReftV    F.Symbol
+type BReftV v    = BReftBV   LHUnresolved v
+type BReftBV b v = UReftBV b v (F.ReftBV b v)
 type BPVar       = PVar      BSort
-type RPVar       = PVar      RSort
-type RReft       = RReftV    F.Symbol
-type RReftV v    = RReftBV Symbol v
-type RReftBV b v = UReftBV b v (F.ReftBV b v)
+type BRProp r    = BRPropV Symbol r
+type BRPropV v r = BRPropBV LHUnresolved v r
+type BRPropBV b v r = RefB b (BSortBV b v) (BRTypeBV b v r)
+
 type BareType    = BareTypeV F.Symbol
 type BareTypeParsed = BareTypeV F.LocSymbol
 type BareTypeLHName = BareTypeV LHName
-type BareTypeV v = BRTypeV v (RReftV v)
-type BareTypeBV b v = BRTypeBV b v (RReftBV b v)
+type BareTypeV v = BRTypeV v (BReftV v)
+type BareTypeBV b v = BRTypeBV b v (BReftBV b v)
+
+type RRType      = RTypeBV LHName LHName RTyCon RTyVar    -- ^ "Resolved" version
+type RSort       = RRType    (NoReftB LHName)
+type RPVar       = PVar      RSort
+type RReft       = RReftV    LHName
+type RReftV v    = RReftBV LHName v
+type RReftBV b v = UReftBV b v (F.ReftBV b v)
+type RRProp r    = Ref RSort (RRType r)
+type RExpr       = F.ExprBV LHName LHName
+
 type SpecType    = RRType    RReft
 type SpecProp    = RRProp    RReft
-type RRProp r    = Ref       RSort (RRType r)
-type BRProp r    = BRPropV Symbol r
-type BRPropV v r = Ref       (BSortV v) (BRTypeV v r)
 type SpecRTVar   = RTVar     RTyVar RSort
-
-
 
 type LocBareType = F.Located BareType
 type LocBareTypeLHName = F.Located BareTypeLHName
 type LocBareTypeParsed = F.Located BareTypeParsed
 type LocSpecType = F.Located SpecType
-
 
 --------------------------------------------------------------------------------
 -- | Printing Refinement Types -------------------------------------------------

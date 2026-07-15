@@ -195,7 +195,7 @@ mapArgumens allowTC lc t1 t2 = go xts1' xts2'
 -- should constructors have implicits? probably not
 defRefType :: Bool -> Type -> DefBV LHName Symbol (RRType (ReftBV b v)) DataCon -> RRType (ReftBV b v)
 defRefType allowTC tdc (Def f dc mt xs body)
-                    = generalize $ mkArrow as' [] xts t'
+                    = _ $ generalize $ mkArrow as' [] xts t'
   where
     xts             = stitchArgs allowTC (fSrcSpan f) dc xs ts
     t'              = refineWithCtorBody dc f body t

@@ -4,6 +4,7 @@
 {-# LANGUAGE TupleSections        #-}
 {-# LANGUAGE TypeOperators        #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
@@ -290,11 +291,11 @@ replacePreds msg                 = L.foldl' go
 --         go z (π, RPropP r) = replacePVarReft (π, r) <$> z
 
 -------------------------------------------------------------------------------------
-substPVar :: PVarV v (BSortV v) -> PVarV v (BSortV v) -> BareTypeParsed -> BareTypeParsed
+substPVar :: forall b v . Eq b => PVarBV b v (RReftBV b v) -> PVarBV b v (RReftBV b v) -> BRTypeBV b v (RReftBV b v) -> BRTypeBV b v (RReftBV b v)
 -------------------------------------------------------------------------------------
 substPVar src dst = go
   where
-    go :: BareTypeParsed -> BareTypeParsed
+    go :: BRTypeBV b v (RReftBV b v) -> BRTypeBV b v (RReftBV b v)
     go (RVar a r)         = RVar a (goRR r)
     go (RApp c ts rs r)   = RApp c (go <$> ts) (goR <$> rs) (goRR r)
     go (RAllP q t)
@@ -308,13 +309,13 @@ substPVar src dst = go
     go (RAppTy t1 t2 r)   = RAppTy    (go t1) (go t2) (goRR r)
     go (RHole r)          = RHole     (goRR r)
     go t@(RExprArg  _)    = t
-    goR :: BRPropV LocSymbol (RReftV LocSymbol) -> BRPropV LocSymbol (RReftV LocSymbol)
+    goR :: BRPropBV b v (RReftBV b v) -> BRPropBV b v (RReftBV b v)
     goR rp = rp {rf_body = go (rf_body rp) }
-    goRR :: RReftV LocSymbol -> RReftV LocSymbol
+    goRR :: BReftBV b v -> BReftBV b v
     goRR rr = rr { ur_pred = goP (ur_pred rr) }
-    goP :: PredicateV LocSymbol -> PredicateV LocSymbol
+    goP :: PredicateBV b v -> PredicateBV b v
     goP (Pr ps) = Pr (goPV <$> ps)
-    goPV :: UsedPVarV LocSymbol -> UsedPVarV LocSymbol
+    goPV :: UsedPVarBV b v -> UsedPVarBV b v
     goPV pv
       | pname pv == pname src = pv { pname = pname dst }
       | otherwise             = pv

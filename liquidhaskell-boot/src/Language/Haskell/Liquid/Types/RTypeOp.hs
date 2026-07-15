@@ -78,7 +78,9 @@ import           Language.Fixpoint.Types (ExprBV, Symbol)
 
 import           Language.Haskell.Liquid.Types.DataDecl
 import           Language.Haskell.Liquid.Types.Errors
+import           Language.Haskell.Liquid.Types.Names
 import           Language.Haskell.Liquid.Types.RType
+import           Language.Haskell.Liquid.WiredIn ()
 import           Language.Haskell.Liquid.Misc
 
 
@@ -171,14 +173,21 @@ mkUnivs :: (Foldable t, Foldable t1)
         -> RTypeBV b v c tv r
 mkUnivs αs πs rt = foldr (\(a,r) t -> RAllT a t r) (foldr RAllP rt πs) αs
 
-bkUnivClass :: SpecType -> ([(SpecRTVar, RReft)],[PVar RSort], [(RTyCon, [SpecType])], SpecType )
+bkUnivClass ::
+  (F.PPrint c, TyConable c) =>
+  RTypeBV b v c tv r ->
+  ( [(RTVar tv (RTypeBV b v c tv (NoReftB b)), r)]
+  , [PVarBV b v (RTypeBV b v c tv (NoReftB b))]
+  , [(c, [RTypeBV b v c tv r])]
+  , RTypeBV b v c tv r
+  )
 bkUnivClass t        = (as, ps, cs, t2)
   where
     (as, ps, t1) = bkUniv  t
     (cs, t2)     = bkClass t1
 
 
-bkUniv :: RTypeBV b v tv c r -> ([(RTVar c (RTypeBV b v tv c (NoReftB b)), r)], [PVarBV b v (RTypeBV b v tv c (NoReftB b))], RTypeBV b v tv c r)
+bkUniv :: RTypeBV b v c tv r -> ([(RTVar tv (RTypeBV b v c tv (NoReftB b)), r)], [PVarBV b v (RTypeBV b v c tv (NoReftB b))], RTypeBV b v c tv r)
 bkUniv (RAllT α t r) = let (αs, πs, t') = bkUniv t in ((α, r):αs, πs, t')
 bkUniv (RAllP π t)   = let (αs, πs, t') = bkUniv t in (αs, π:πs, t')
 bkUniv t             = ([], [], t)
@@ -188,14 +197,20 @@ bkUniv t             = ([], [], t)
 -- bkFun (RFun x t t' r) = let (xs, ts, rs, t'') = bkFun t'  in (x:xs, t:ts, r:rs, t'')
 -- bkFun t               = ([], [], [], t)
 
-bkUnivClass' :: SpecType ->
-  ([(SpecRTVar, RReft)], [PVar RSort], [(Symbol, SpecType, RReft)], SpecType)
+bkUnivClass' ::
+  TyConable c =>
+  RTypeBV b v c tv r ->
+  ( [(RTVar tv (RTypeBV b v c tv (NoReftB b)), r)]
+  , [PVarBV b v (RTypeBV b v c tv (NoReftB b))]
+  , [(b, RTypeBV b v c tv r, r)]
+  , RTypeBV b v c tv r
+  )
 bkUnivClass' t = (as, ps, zip3 bs ts rs, t2)
   where
     (as, ps, t1) = bkUniv  t
     (bs, ts, rs, t2)     = bkClass' t1
 
-bkClass' :: TyConable t => RType t t1 a -> ([Symbol], [RType t t1 a], [a], RType t t1 a)
+bkClass' :: TyConable c => RTypeBV b v c tv r -> ([b], [RTypeBV b v c tv r], [r], RTypeBV b v c tv r)
 bkClass' (RFun x _ t@(RApp c _ _ _) t' r)
   | isClass c
   = let (xs, ts, rs, t'') = bkClass' t' in (x:xs, t:ts, r:rs, t'')
@@ -228,20 +243,20 @@ rCls c ts   = RApp (RTyCon c [] defaultTyConInfo) ts [] trueReft
 rRCls :: IsReft r => c -> [RType c tv r] -> RType c tv r
 rRCls rc ts = RApp rc ts [] trueReft
 
-addInvCond :: SpecType -> RReft -> SpecType
+addInvCond :: LHUniqueM m => SpecType -> RReft -> m SpecType
 addInvCond t r'
   | isTauto $ ur_reft r' -- null rv
-  = t
+  = pure t
   | otherwise
-  = fromRTypeRep $ trep {ty_res = RRTy [(x', tbd)] r OInv tbd}
-  where
-    trep = toRTypeRep t
-    tbd  = ty_res trep
-    r    = r' {ur_reft = F.Reft (v, rx)}
-    su   = (v, F.EVar x')
-    x'   = "xInv"
-    rx   = F.PIff (F.EVar v) $ F.subst1 rv su
-    F.Reft(v, rv) = ur_reft r'
+  = fromRTypeRep <$> do
+      x' <- makeLocalLHName "xInv"
+      let trep = toRTypeRep t
+          tbd  = ty_res trep
+          r    = r' {ur_reft = F.Reft (v, rx)}
+          su   = (v, F.EVar x')
+          rx   = F.PIff (F.EVar v) $ F.subst1 rv su
+          F.Reft(v, rv) = ur_reft r'
+      return trep {ty_res = RRTy [(x', tbd)] r OInv tbd}
 
 
 instance (IsReft r, F.Subable r, TyConable c, F.Binder v, F.Variable r ~ v, ReftBind r ~ v) => F.Subable (RTPropBV v v c tv r) where
