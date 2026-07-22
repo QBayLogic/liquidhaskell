@@ -10,6 +10,7 @@ module Language.Haskell.Liquid.WiredIn
        , xHead
        , xTail
        , tupleNames
+       , papp
 
        , wiredInUniqueBound
        ) where
@@ -45,6 +46,8 @@ tupleNames =
      in tupE [ln, listE xs, listE fs]
   )
 
+papp :: [LHName]
+papp = $(listE $ flip map [0..8::Int] $ \n -> logic (F.symbol $ "papp" <> show n))
 
 wiredInUniqueBound :: Word64
 wiredInUniqueBound = $(sealUniqueCounter >> [| 0x8000_0000_0000_0000 |])

@@ -78,7 +78,7 @@ cinfoError (Ci _ (Just e) _) = e
 cinfoError (Ci l _ _)        = ErrOther l (text $ "Cinfo: " ++ GM.showPpr l)
 
 -------------------------------------------------------------------------
-tidySpecType :: Tidy -> SpecType -> SpecType
+tidySpecType :: Tidy -> FixType -> FixType
 -------------------------------------------------------------------------
 tidySpecType k
   = tidyEqual
@@ -90,7 +90,7 @@ tidySpecType k
   . tidyFunBinds
   . tidyTyVars
 
-tidyValueVars :: SpecType -> SpecType
+tidyValueVars :: FixType -> FixType
 tidyValueVars = mapReft $ \u -> u { ur_reft = tidyVV $ ur_reft u }
 
 tidyVV :: Reft -> Reft
@@ -103,7 +103,7 @@ tidyVV r@(Reft (va,_))
     xs        = syms r
     isJunk    = isPrefixOfSym "x"
 
-tidySymbols :: Tidy -> SpecType -> SpecType
+tidySymbols :: Tidy -> FixType -> FixType
 tidySymbols k t = substa (shortSymbol k . tidySymbol) $ mapBind dropBind t
   where
     xs          = S.fromList (syms t)
@@ -113,7 +113,7 @@ shortSymbol :: Tidy -> Symbol -> Symbol
 shortSymbol Lossy = GM.dropModuleNames
 shortSymbol _     = id
 
-tidyLocalRefas   :: Tidy -> SpecType -> SpecType
+tidyLocalRefas   :: Tidy -> FixType -> FixType
 tidyLocalRefas k = mapReft (txReft' k)
   where
     txReft' Full                  = id
@@ -122,7 +122,7 @@ tidyLocalRefas k = mapReft (txReft' k)
     dropLocals                    = pAnd . filter (not . any isTmp . syms) . conjuncts
     isTmp x                       = any (`isPrefixOfSym` x) [anfPrefix, "ds_"]
 
-tidyEqual :: SpecType -> SpecType
+tidyEqual :: FixType -> FixType
 tidyEqual = mapReft txReft
   where
     txReft u                      = u { ur_reft = mapPredReft dropInternals $ ur_reft u }
@@ -130,7 +130,7 @@ tidyEqual = mapReft txReft
 
 -- | Drop conjuncts that contain data constructor testing or
 -- selector functions.
-tidyInternalRefas   :: SpecType -> SpecType
+tidyInternalRefas   :: FixType -> FixType
 tidyInternalRefas = mapReft txReft
   where
     txReft u                      = u { ur_reft = mapPredReft dropInternals $ ur_reft u }
@@ -138,18 +138,18 @@ tidyInternalRefas = mapReft txReft
     isIntern x                    = "is$" `isPrefixOfSym` x || "$select" `isSuffixOfSym` x
 
 
-tidyDSymbols :: SpecType -> SpecType
+tidyDSymbols :: FixType -> FixType
 tidyDSymbols t = mapBind tx $ substa tx t
   where
     tx         = bindersTx [x | x <- syms t, isTmp x]
     isTmp      = (tempPrefix `isPrefixOfSym`)
 
-tidyFunBinds :: SpecType -> SpecType
+tidyFunBinds :: FixType -> FixType
 tidyFunBinds t = mapBind tx $ substa tx t
   where
     tx         = bindersTx $ filter GM.isTmpSymbol $ funBinds t
 
-tidyTyVars :: SpecType -> SpecType
+tidyTyVars :: FixType -> FixType
 tidyTyVars t = subsTyVarsAll αβs t
   where
     αβs  = zipWith (\α β -> (α, toRSort β, β)) αs βs
@@ -229,16 +229,16 @@ panicError = Ex.throw
 instance PPrint (CtxError Doc) where
   pprintTidy k ce = ppError k (ctCtx ce) $ ctErr ce
 
-instance PPrint (CtxError SpecType) where
+instance PPrint (CtxError FixType) where
   pprintTidy k ce = ppError k (ctCtx ce) $ ppSpecTypeErr <$> ctErr ce
 
 instance PPrint Error where
   pprintTidy k = ppError k empty . fmap ppSpecTypeErr
 
-ppSpecTypeErr :: SpecType -> Doc
+ppSpecTypeErr :: FixType -> Doc
 ppSpecTypeErr = ppSpecType Lossy
 
-ppSpecType :: Tidy -> SpecType -> Doc
+ppSpecType :: Tidy -> FixType -> Doc
 ppSpecType k = rtypeDoc     k
              . tidySpecType k
              . fmap (everywhere (mkT noCasts))

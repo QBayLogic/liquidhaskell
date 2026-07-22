@@ -32,6 +32,7 @@ module Language.Haskell.Liquid.Types.RType (
 
   -- * Refined Type Constructors
   , RTyCon (RTyCon, rtc_tc, rtc_info)
+  , FTyCon (..)
   , TyConInfo(..), defaultTyConInfo
   , rTyConPVs
   -- , isClassRTyCon
@@ -98,6 +99,7 @@ module Language.Haskell.Liquid.Types.RType (
   , BareTypeParsed
   , BareTypeV, BareTypeBV
   , SpecType, SpecProp, SpecRTVar
+  , FixType, FixSort
   , LocBareType
   , LocBareTypeLHName
   , LocBareTypeParsed
@@ -177,6 +179,7 @@ import           Language.Haskell.Liquid.Types.Variance
 import           Language.Haskell.Liquid.Types.Errors
 import           Language.Haskell.Liquid.Misc
 import           Language.Haskell.Liquid.UX.Config
+import           Language.Haskell.Liquid.WiredIn
 
 
 newtype RFInfo = RFInfo {permitTC :: Maybe Bool }
@@ -228,7 +231,7 @@ data TyConP = TyConP
   { tcpLoc          :: !F.SourcePos
   , tcpCon          :: !TyCon
   , tcpFreeTyVarsTy :: ![RTyVar]
-  , tcpFreePredTy   :: ![PVar RSort]
+  , tcpFreePredTy   :: ![RPVar]
   , tcpVarianceTs   :: !VarianceInfo
   , tcpVariancePs   :: !VarianceInfo
   , tcpSizeFun      :: !(Maybe SizeFun)
@@ -393,7 +396,7 @@ instance (Ord b, Ord v) => Eq (PredicateBV b v) where
 instance (NFData b, NFData v) => NFData (PredicateBV b v) where
   rnf _ = ()
 
-instance Monoid Predicate where
+instance Eq b => Monoid (PredicateBV b v) where
   mempty  = pdTrue
   mappend = (<>)
 
@@ -407,7 +410,7 @@ instance (Ord b, F.Fixpoint b, Hashable b, F.PPrint b, Ord v, F.Fixpoint v, F.PP
 instance (Semigroup a, Eq b) => Semigroup (UReftBV b v a) where
   MkUReft x y <> MkUReft x' y' = MkUReft (x <> x') (y <> y')
 
-instance (Monoid a) => Monoid (UReft a) where
+instance (Monoid a, Eq b) => Monoid (UReftBV b v a) where
   mempty  = MkUReft mempty mempty
   mappend = (<>)
 
@@ -459,6 +462,9 @@ instance F.Symbolic BTyVar where
 instance F.Symbolic RTyVar where
   symbol (RTV tv) = F.symbol tv -- tyVarUniqueSymbol tv
 
+instance Ghc.NamedThing RTyVar where
+  getName (RTV v) = getName v
+
 -- | Highly temporary class as a compatability layer to express that a binder,
 -- especially type variables @tv@, are in the same namespace as another binder.
 class CompatibleBinder b b' where
@@ -499,12 +505,19 @@ data RTyCon = RTyCon
   }
   deriving (Generic, Data)
 
+data FTyCon = FTyCon
+  { ftc_tc    :: TyCon
+  , ftc_pvars :: ![FPVar]
+  , ftc_info  :: !TyConInfo
+  }
+  deriving (Generic, Data)
+
 instance F.Symbolic RTyCon where
   symbol = F.symbol . rtc_tc
 
 instance NFData BTyCon
-
 instance NFData RTyCon
+instance NFData FTyCon
 
 
 mkBTyCon :: F.Located LHUnresolved -> BTyCon
@@ -824,7 +837,7 @@ dropTyVarInfo v = v{ty_var_info = RTVNoInfo True }
 
 data RTVInfo s
   = RTVNoInfo { rtv_is_pol :: Bool }
-  | RTVInfo { rtv_name   :: Symbol
+  | RTVInfo { rtv_name   :: LHName
             , rtv_kind   :: s
             , rtv_is_val :: Bool
             , rtv_is_pol :: Bool -- true iff the type variable gets instantiated with
@@ -837,7 +850,7 @@ data RTVInfo s
 setRtvPol :: RTVar tv a -> Bool -> RTVar tv a
 setRtvPol (RTVar a i) b = RTVar a (i{rtv_is_pol = b})
 
-rTVarToBind :: RTVar RTyVar s  -> Maybe (Symbol, s)
+rTVarToBind :: RTVar RTyVar s  -> Maybe (LHName, s)
 rTVarToBind = go . ty_var_info
   where
     go RTVInfo{..} | rtv_is_val = Just (rtv_name, rtv_kind)
@@ -865,7 +878,7 @@ data RefB b τ t = RProp
 
 instance (NFData b, NFData τ, NFData t) => NFData (RefB b τ t)
 
-rPropP :: [(b, τ)] -> r -> RefB b τ (RTypeV v c tv r)
+rPropP :: [(b, τ)] -> r -> RefB b τ (RTypeBV b v c tv r)
 rPropP τ r = RProp τ (RHole r)
 
 -- | @RTProp@ is a convenient alias for @Ref@ that will save a bunch of typing.
@@ -937,16 +950,20 @@ type BareTypeBV b v = BRTypeBV b v (BReftBV b v)
 
 type RRType      = RTypeBV LHName LHName RTyCon RTyVar    -- ^ "Resolved" version
 type RSort       = RRType    (NoReftB LHName)
-type RPVar       = PVar      RSort
+type RPVar       = PVarBV LHName LHName RSort
 type RReft       = RReftV    LHName
 type RReftV v    = RReftBV LHName v
 type RReftBV b v = UReftBV b v (F.ReftBV b v)
-type RRProp r    = Ref RSort (RRType r)
+type RRProp r    = RefB LHName RSort (RRType r)
 type RExpr       = F.ExprBV LHName LHName
 
 type SpecType    = RRType    RReft
 type SpecProp    = RRProp    RReft
 type SpecRTVar   = RTVar     RTyVar RSort
+
+type FPVar       = PVarBV Symbol Symbol FixSort
+type FixType     = RType FTyCon RTyVar (UReft F.Reft)
+type FixSort     = RType FTyCon RTyVar NoReft
 
 type LocBareType = F.Located BareType
 type LocBareTypeLHName = F.Located BareTypeLHName
@@ -1114,7 +1131,7 @@ instance Top (PredicateBV b v) where
 instance (F.Binder v, F.Fixpoint v) => Semigroup (F.ReftBV v v) where
   (<>) = F.meetReft
 
-instance Monoid F.Reft where
+instance (F.Binder v, F.Fixpoint v) => Monoid (F.ReftBV v v) where
   mempty  = F.trueReft
   mappend = (<>)
 
@@ -1131,7 +1148,7 @@ instance (F.Subable r, F.Variable r ~ v) => F.Subable (UReftBV v v r) where
   substf f (MkUReft r z) = MkUReft (F.substf f r) (F.substf f z)
   substa f (MkUReft r z) = MkUReft (F.substa f r) (F.substa f z)
 
-instance F.Expression (UReft ()) where
+instance (ToReft r, b ~ ReftBind r, v ~ ReftVar r) => F.Expression b v (UReftBV b v r) where
   expr = F.expr . toReft
 
 instance Meet Predicate
@@ -1164,3 +1181,8 @@ instance PredicateCompat LHUnresolved F.Symbol where
   pappV _ = pappV (Proxy :: Proxy Symbol)
   pnameV = F.symbol . pname
   pargV = F.symbol . parg
+
+instance PredicateCompat LHName LHName where
+  pappV _ = (papp !!)
+  pnameV = pname
+  pargV = parg

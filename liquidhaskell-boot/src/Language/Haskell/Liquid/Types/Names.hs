@@ -430,6 +430,10 @@ instance GHC.Binary LogicName where
 instance PPrint LHName where
   pprintTidy _ = pprint . getLHNameSymbol
 
+instance Fixpoint LHName where
+  toFix lhname = case lhname of
+    LHNResolved { } -> pprint . lhNameToResolvedSymbol $ lhname
+
 instance PPrint LHUnresolved where
   pprintTidy _ (LHNUnresolved _ name) = pprint name
   pprintTidy _ (LHUGHC name) = text $ showPpr name
@@ -437,8 +441,10 @@ instance PPrint LHUnresolved where
 makeResolvedLHName :: LHResolvedName -> Symbol -> LHName
 makeResolvedLHName = LHNResolved
 
-makeGHCLHName :: GHC.Name -> Symbol -> LHName
-makeGHCLHName n s = makeResolvedLHName (LHRGHC n) s
+makeGHCLHName :: GHC.NamedThing a => a -> LHName
+makeGHCLHName n = makeResolvedLHName (LHRGHC n') (symbol n')
+ where
+  n' = GHC.getName n
 
 makeGHCLHNameFromId :: GHC.Id -> LHName
 makeGHCLHNameFromId x =
@@ -446,7 +452,7 @@ makeGHCLHNameFromId x =
               GHC.DataConWrapId dc -> GHC.getName dc
               GHC.DataConWorkId dc -> GHC.getName dc
               _ -> GHC.getName x
-     in makeGHCLHName n (symbol n)
+     in makeGHCLHName n
 
 makeLocalLHName :: LHUniqueM m => Symbol -> m LHName
 makeLocalLHName s = do
@@ -464,8 +470,7 @@ makeGeneratedLogicLHName s = do
   return $ LHNResolved (LHRLogic (GeneratedLogicName s u)) s
 
 makeGHCLHNameLocated :: (GHC.NamedThing a, Symbolic a) => a -> Located LHName
-makeGHCLHNameLocated x =
-    makeGHCLHName (GHC.getName x) (symbol x) <$ locNamedThing x
+makeGHCLHNameLocated x = makeGHCLHName x <$ locNamedThing x
 
 makeGHCLHNameLocatedFromId :: GHC.Id -> Located LHName
 makeGHCLHNameLocatedFromId x =

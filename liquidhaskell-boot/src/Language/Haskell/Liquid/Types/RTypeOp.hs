@@ -97,8 +97,7 @@ type BScope = Bool
 --------------------------------------------------------------------------------
 -- | Constructor and Destructors for RTypes ------------------------------------
 --------------------------------------------------------------------------------
-type RRep        = RTypeRep RTyCon RTyVar
-type SpecRep     = RRep      RReft
+type SpecRep     = RTypeRepBV LHName LHName RTyCon RTyVar RReft
 
 type RTypeRep = RTypeRepV Symbol
 type RTypeRepV = RTypeRepBV Symbol
@@ -666,7 +665,7 @@ mapRFInfoRef :: (RFInfo -> RFInfo)
 mapRFInfoRef _ (RProp s (RHole r)) = RProp s $ RHole r
 mapRFInfoRef f (RProp s t)    = RProp  s $ mapRFInfo f t
 
-mapBot :: (RType c tv r -> RType c tv r) -> RType c tv r -> RType c tv r
+mapBot :: (RTypeBV b v c tv r -> RTypeBV b v c tv r) -> RTypeBV b v c tv r -> RTypeBV b v c tv r
 mapBot f (RAllT α t r)     = RAllT α (mapBot f t) r
 mapBot f (RAllP π t)       = RAllP π (mapBot f t)
 mapBot f (RFun x i t t' r) = RFun x i (mapBot f t) (mapBot f t') r
@@ -677,8 +676,8 @@ mapBot f (RAllE b t1 t2)   = RAllE b  (mapBot f t1) (mapBot f t2)
 mapBot f (RRTy e r o t)    = RRTy (fmap (mapBot f) <$> e) r o (mapBot f t)
 mapBot f t'                = f t'
 
-mapBotRef :: (RType c tv r -> RType c tv r)
-          -> Ref τ (RType c tv r) -> Ref τ (RType c tv r)
+mapBotRef :: (RTypeBV b v c tv r -> RTypeBV b v c tv r)
+          -> RefB b τ (RTypeBV b v c tv r) -> RefB b τ (RTypeBV b v c tv r)
 mapBotRef _ (RProp s (RHole r)) = RProp s $ RHole r
 mapBotRef f (RProp s t)         = RProp s $ mapBot f t
 
