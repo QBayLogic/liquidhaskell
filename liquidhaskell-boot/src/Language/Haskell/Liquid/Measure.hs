@@ -104,7 +104,7 @@ makeDataConType allowTC ds | Mb.isNothing (dataConWrapId_maybe dc)
     woId = dataConWorkId dc
     t    = varType woId
     ts   = defRefType allowTC t <$> ds
-    _msg  = "makeDataConType0" ++ showpp (woId, t, ts)
+    _msg  = "makeDataConType0" ++ showpp (woId :: LHName, t, ts)
 
 makeDataConType allowTC ds
   = [(woId, extend allowTC loci woRType wrRType), (wrId, extend allowTC loci wrRType woRType)]

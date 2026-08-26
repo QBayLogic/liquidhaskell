@@ -165,7 +165,7 @@ data DataConP = DataConP
   { dcpLoc        :: !F.SourcePos
   , dcpCon        :: !Ghc.DataCon            -- ^ Corresponding GHC DataCon
   , dcpFreeTyVars :: ![RTyVar]               -- ^ Type parameters
-  , dcpFreePred   :: ![PVar RSort]           -- ^ Abstract Refinement parameters
+  , dcpFreePred   :: ![RPVar]                -- ^ Abstract Refinement parameters
   , dcpTyConstrs  :: ![SpecType]             -- ^ ? Class constraints (via `dataConStupidTheta`)
   , dcpTyArgs     :: ![(LHName, SpecType)] -- ^ Value parameters
   , dcpTyRes      :: !SpecType               -- ^ Result type

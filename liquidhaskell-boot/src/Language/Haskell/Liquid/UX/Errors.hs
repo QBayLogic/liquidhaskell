@@ -32,8 +32,8 @@ import qualified Language.Haskell.Liquid.Misc        as Misc
 
 -- import Debug.Trace
 
-type Ctx  = M.HashMap F.Symbol SpecType
-type CtxM = M.HashMap F.Symbol (WithModel SpecType)
+type Ctx  = M.HashMap F.Symbol FixType
+type CtxM = M.HashMap F.Symbol (WithModel FixType)
 
 ------------------------------------------------------------------------
 tidyError :: Config -> Error -> Error
@@ -95,7 +95,7 @@ tidyCtxM xs m  = (θ, M.fromList yts)
     (θ, xts)  = tidyTemps $ second (fmap stripReft) <$> tidyREnvM xs m
     tBind x t = (x', fmap (`shiftVV` x') t) where x' = F.tidySymbol x
 
-tidyREnv :: [(F.Symbol, SpecType)] -> (F.Subst, [(F.Symbol, SpecType)])
+tidyREnv :: [(F.Symbol, FixType)] -> (F.Subst, [(F.Symbol, FixType)])
 tidyREnv xts    = (θ, second (F.subst θ) <$> zts)
   where
     θ           = expandVarDefs yes
@@ -120,7 +120,7 @@ expandVarDefs      = go mempty
        (yes, zes)  = L.partition (isDef xs . snd) xes
     isDef xs e     = not (any (`S.member` xs) (F.syms e))
 
-isInline :: (a, SpecType) -> Either (a, F.Expr) (a, SpecType)
+isInline :: (a, FixType) -> Either (a, F.Expr) (a, FixType)
 isInline (x, t) =
     either (Left . (x,)) (Right . (x,)) (isInline' t')
   where
@@ -128,7 +128,7 @@ isInline (x, t) =
     -- bindings are eliminated in isInline'
     t' = tidyInternalRefas t
 
-isInline' :: SpecType -> Either F.Expr SpecType
+isInline' :: FixType -> Either F.Expr FixType
 isInline' t = case ro of
                 Nothing -> Right t'
                 Just rr -> case F.isSingletonReft (ur_reft rr) of
@@ -138,12 +138,12 @@ isInline' t = case ro of
               where
                   (t', ro) = stripRType t
 
-stripReft     :: SpecType -> SpecType
+stripReft     :: FixType -> FixType
 stripReft t   = maybe t' (strengthen t') ro
   where
     (t', ro)  = stripRType t
 
-stripRType    :: SpecType -> (SpecType, Maybe RReft)
+stripRType    :: FixType -> (FixType, Maybe FReft)
 stripRType st = (t', ro)
   where
     t'        = fmap (const (uTop mempty)) t
@@ -154,7 +154,7 @@ stripRType st = (t', ro)
 -- A symbol needs a binding, if the binding binds the symbol, or it contains the
 -- symbol, or it contains symbols used by bindings that are needed by the
 -- symbol.
-sliceREnv :: [F.Symbol] -> Ctx -> [(F.Symbol, SpecType)]
+sliceREnv :: [F.Symbol] -> Ctx -> [(F.Symbol, FixType)]
 sliceREnv xs m =
     [(x, t) | x <- relatedSyms, Just t <- [M.lookup x m], ok t]
   where
@@ -162,7 +162,7 @@ sliceREnv xs m =
     relatedSyms = L.sort $ S.toList $ F.relatedSymbols (S.fromList xs) directlyUses
     ok        = not . isFunTy
 
-tidyREnvM      :: [F.Symbol] -> CtxM -> [(F.Symbol, WithModel SpecType)]
+tidyREnvM      :: [F.Symbol] -> CtxM -> [(F.Symbol, WithModel FixType)]
 tidyREnvM xs m = [(x, t) | x <- xs', t <- maybeToList (M.lookup x m), ok t]
   where
     xs'       = expandFix deps xs

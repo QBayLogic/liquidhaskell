@@ -332,7 +332,7 @@ class FreeVar a v where
   freeVars :: a -> [v]
 
 -- MOVE TO TYPES
-instance FreeVar RTyCon RTyVar where
+instance FreeVar (RTyConBV b v) RTyVar where
   freeVars = (RTV <$>) . GM.tyConTyVarsDef . rtc_tc
 
 -- MOVE TO TYPES
@@ -1139,13 +1139,13 @@ subsFreeRef m s (α', τ', t')  (RProp ss t)
 subts :: (SubsTy tv ty c) => [(tv, ty)] -> c -> c
 subts = flip (foldr subt)
 
-instance SubsTy RTyVar (RTypeBV b v RTyCon RTyVar r) RTyVar where
+instance SubsTy RTyVar (RTypeBV b v (RTyConBV b v) RTyVar r) RTyVar where
   subt (RTV x, t) (RTV z) | isTyVar z, tyVarKind z == TyVarTy x
     = RTV (setVarType z $ toType False t)
   subt _ v
     = v
 
-instance SubsTy RTyVar (RTypeBV b v RTyCon RTyVar (NoReftB b)) (RTVar RTyVar (RTypeBV b v RTyCon RTyVar (NoReftB b))) where
+instance SubsTy RTyVar (RRSortBV b v) (RTVar RTyVar (RRSortBV b v)) where
   -- NV TODO: update kind
   subt su rty = rty { ty_var_value = subt su $ ty_var_value rty }
 
@@ -1228,7 +1228,7 @@ instance SubsTy Symbol RSort Sort where
   subt _ s          = s
 
 
-instance SubsTy RTyVar RSort Sort where
+instance SubsTy RTyVar (RRSortBV b v) Sort where
   subt (v, sv) (FObj s)
     | symbol v == s = typeSort mempty (toType True sv)
     | otherwise     = FObj s
@@ -1237,7 +1237,7 @@ instance SubsTy RTyVar RSort Sort where
 instance (SubsTy tv ty ty) => SubsTy tv ty (PVarBV b v ty) where
   subt su (PV n pvk v xts) = PV n (subt su pvk) v [(subt su t, x, y) | (t,x,y) <- xts]
 
-instance SubsTy RTyVar RSort RTyCon where
+instance Binder b => SubsTy RTyVar (RRSortBV b v) (RTyConBV b v) where
    subt z c = RTyCon tc ps' i
      where
        tc   = rtc_tc c
@@ -1261,7 +1261,7 @@ instance SubsTy RTyVar RTyVar SpecType where
   subt (α, a) = subt (α, RVar a NoReft :: RSort)
 
 
-instance SubsTy RTyVar RSort RSort where
+instance Binder b => SubsTy RTyVar (RRSortBV b v) (RRSortBV b v) where
   subt (α, τ) = subsTyVarMeet (α, τ, ofRSort τ)
 
 -- instance SubsTy RTyVar FixSort FixSort where
@@ -1403,7 +1403,7 @@ type ToTypeable r = (IsReft r, ReftBind r ~ LHName, ReftVar r ~ LHName, PPrint r
 
 -- TODO: remove toType, generalize typeSort
 -- YL: really should take a type-level Bool
-toType  :: Bool -> RTypeBV b v RTyCon RTyVar r -> Type
+toType  :: Bool -> RTypeBV b v (RTyConBV b v) RTyVar r -> Type
 toType useRFInfo (RFun _ RFInfo{permitTC = permitTC} t@(RApp c _ _ _) t' _)
   | useRFInfo && isErasable c = toType useRFInfo t'
   | otherwise

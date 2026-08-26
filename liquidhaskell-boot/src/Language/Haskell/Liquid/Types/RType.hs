@@ -31,8 +31,9 @@ module Language.Haskell.Liquid.Types.RType (
   , BTyVar(..)
 
   -- * Refined Type Constructors
-  , RTyCon (RTyCon, rtc_tc, rtc_info)
-  , FTyCon (..)
+  , RTyCon
+  , RTyConBV (RTyCon, rtc_tc, rtc_info)
+  , FTyCon
   , TyConInfo(..), defaultTyConInfo
   , rTyConPVs
   -- , isClassRTyCon
@@ -88,7 +89,8 @@ module Language.Haskell.Liquid.Types.RType (
   , TyConP   (..)
 
   -- * Pre-instantiated RType
-  , RRType, RRProp, RExpr
+  , RSortBV
+  , RRTypeBV, RRType, RRSortBV, RRProp, RExpr
   , BRType, BRTypeV, BRTypeBV, BRProp, BRPropV, BRPropBV
   , BSort, BSortV, BSortBV, BPVar
   , RTVU, PVU
@@ -110,6 +112,8 @@ module Language.Haskell.Liquid.Types.RType (
   , UsedPVarBV
   , RPVar, RReft, RReftV, RReftBV
   , BReft, BReftV, BReftBV
+  , FReft
+  , FPVar
 
   -- * Printer Configuration
   , PPEnv (..)
@@ -498,27 +502,18 @@ data BTyCon = BTyCon
   deriving (Generic, Data)
   deriving (B.Binary, Hashable) via Generically BTyCon
 
-data RTyCon = RTyCon
+data RTyConBV b v = RTyCon
   { rtc_tc    :: TyCon         -- ^ GHC Type Constructor
-  , rtc_pvars :: ![RPVar]      -- ^ Predicate Parameters
+  , rtc_pvars :: ![PVarBV b v (RRSortBV b v)]      -- ^ Predicate Parameters
   , rtc_info  :: !TyConInfo    -- ^ TyConInfo
   }
   deriving (Generic, Data)
 
-data FTyCon = FTyCon
-  { ftc_tc    :: TyCon
-  , ftc_pvars :: ![FPVar]
-  , ftc_info  :: !TyConInfo
-  }
-  deriving (Generic, Data)
-
-instance F.Symbolic RTyCon where
+instance F.Symbolic (RTyConBV b v) where
   symbol = F.symbol . rtc_tc
 
 instance NFData BTyCon
-instance NFData RTyCon
-instance NFData FTyCon
-
+instance (NFData b, NFData v) => NFData (RTyConBV b v)
 
 mkBTyCon :: F.Located LHUnresolved -> BTyCon
 mkBTyCon x = BTyCon x False False
@@ -526,7 +521,7 @@ mkBTyCon x = BTyCon x False False
 
 -- | Accessors for @RTyCon@
 
-isBool :: RType RTyCon t t1 -> Bool
+isBool :: RType (RTyConBV b v) t t1 -> Bool
 isBool (RApp RTyCon{rtc_tc = c} _ _ _) = c == boolTyCon
 isBool _                                 = False
 
@@ -540,7 +535,7 @@ isClassBTyCon = btc_class
 -- isClassRTyCon :: RTyCon -> Bool
 -- isClassRTyCon x = (isClassTyCon $ rtc_tc x) || (rtc_tc x == eqPrimTyCon)
 
-rTyConPVs :: RTyCon -> [RPVar]
+rTyConPVs :: RTyConBV b v -> [PVarBV b v (RRSortBV b v)]
 rTyConPVs     = rtc_pvars
 
 isEqType :: TyConable c => RTypeV v c t t1 -> Bool
@@ -584,7 +579,7 @@ class (Eq c) => TyConable c where
 -- | TyConable Instances -------------------------------------------------------
 -------------------------------------------------------------------------------
 
-instance TyConable RTyCon where
+instance TyConable (RTyConBV b v) where
   isFun      = isArrowTyCon . rtc_tc
   isList     = (listTyCon ==) . rtc_tc
   isTuple    = Ghc.isTupleTyCon   . rtc_tc
@@ -653,7 +648,7 @@ instance TyConable BTyCon where
     LHNUnresolved _ s -> ppTycon s
     LHUGHC name -> text $ showPpr name
 
-instance Eq RTyCon where
+instance Eq (RTyConBV b v) where
   x == y = rtc_tc x == rtc_tc y
 
 instance Eq BTyCon where
@@ -662,7 +657,7 @@ instance Eq BTyCon where
 instance Ord BTyCon where
   compare x y = compare (btc_tc x) (btc_tc y)
 
-instance F.Fixpoint RTyCon where
+instance F.Fixpoint (RTyConBV b v) where
   toFix (RTyCon c _ _) = text $ showPpr c
 
 instance F.Fixpoint BTyCon where
@@ -670,7 +665,7 @@ instance F.Fixpoint BTyCon where
     LHNUnresolved _ s -> text $ F.symbolString s
     LHUGHC name -> text $ showPpr name
 
-instance F.PPrint RTyCon where
+instance (Ord b, Hashable b, F.Fixpoint b, F.PPrint b, Ord v, F.Fixpoint v, F.PPrint v) => F.PPrint (RTyConBV b v) where
   pprintTidy k c
     | ppDebug ppEnv = F.pprintTidy k tc  <-> angleBrackets (F.pprintTidy k pvs)
     | otherwise     = text . showPpr . rtc_tc $ c
@@ -686,7 +681,7 @@ instance F.PPrint BTyCon where
 instance F.PPrint v => F.PPrint (RTVar v s) where
   pprintTidy k (RTVar x _) = F.pprintTidy k x
 
-instance Show RTyCon where
+instance F.PPrint (RTyConBV b v) => Show (RTyConBV b v) where
   show = F.showpp
 
 instance Show BTyCon where
@@ -928,32 +923,37 @@ instance Semigroup (NoReftB b) where
 instance Monoid (NoReftB b) where
   mempty = NoReft
 
-type BRType      = BRTypeV Symbol
-type BRTypeV v   = BRTypeBV LHUnresolved v
-type BRTypeBV b v = RTypeBV b v  BTyCon BTyVar
-type BSort       = BSortV Symbol
-type BSortV v    = BSortBV LHUnresolved v
-type BSortBV b v = BRTypeBV b v (NoReftB b)
-type BReft       = BReftV    F.Symbol
-type BReftV v    = BReftBV   LHUnresolved v
-type BReftBV b v = UReftBV b v (F.ReftBV b v)
-type BPVar       = PVar      BSort
-type BRProp r    = BRPropV Symbol r
-type BRPropV v r = BRPropBV LHUnresolved v r
-type BRPropBV b v r = RefB b (BSortBV b v) (BRTypeBV b v r)
+type RSortBV b v c tv = RTypeBV b v c tv (NoReftB b)
 
+type BRTypeBV b v = RTypeBV b v  BTyCon BTyVar
+type BRTypeV v   = BRTypeBV LHUnresolved v
+type BRType      = BRTypeV Symbol
+type BSortBV b v = BRTypeBV b v (NoReftB b)
+type BSortV v    = BSortBV LHUnresolved v
+type BSort       = BSortV Symbol
+type BReftBV b v = UReftBV b v (F.ReftBV b v)
+type BReftV v    = BReftBV   LHUnresolved v
+type BReft       = BReftV    F.Symbol
+type BPVar       = PVar      BSort
+type BRPropBV b v r = RefB b (BSortBV b v) (BRTypeBV b v r)
+type BRPropV v r = BRPropBV LHUnresolved v r
+type BRProp r    = BRPropV Symbol r
+
+type BareTypeBV b v = BRTypeBV b v (BReftBV b v)
+type BareTypeV v = BRTypeV v (BReftV v)
 type BareType    = BareTypeV F.Symbol
 type BareTypeParsed = BareTypeV F.LocSymbol
 type BareTypeLHName = BareTypeV LHName
-type BareTypeV v = BRTypeV v (BReftV v)
-type BareTypeBV b v = BRTypeBV b v (BReftBV b v)
 
-type RRType      = RTypeBV LHName LHName RTyCon RTyVar    -- ^ "Resolved" version
-type RSort       = RRType    (NoReftB LHName)
+type RRTypeBV b v = RTypeBV b v (RTyConBV b v) RTyVar
+type RRType      = RRTypeBV LHName LHName -- ^ "Resolved" version
+type RRSortBV b v = RRTypeBV b v (NoReftB b)
+type RSort       = RRSortBV LHName LHName
+type RTyCon      = RTyConBV LHName LHName
 type RPVar       = PVarBV LHName LHName RSort
-type RReft       = RReftV    LHName
-type RReftV v    = RReftBV LHName v
 type RReftBV b v = UReftBV b v (F.ReftBV b v)
+type RReftV v    = RReftBV LHName v
+type RReft       = RReftV    LHName
 type RRProp r    = RefB LHName RSort (RRType r)
 type RExpr       = F.ExprBV LHName LHName
 
@@ -961,9 +961,11 @@ type SpecType    = RRType    RReft
 type SpecProp    = RRProp    RReft
 type SpecRTVar   = RTVar     RTyVar RSort
 
+type FTyCon      = RTyConBV Symbol Symbol
 type FPVar       = PVarBV Symbol Symbol FixSort
-type FixType     = RType FTyCon RTyVar (UReft F.Reft)
-type FixSort     = RType FTyCon RTyVar NoReft
+type FReft       = UReft F.Reft
+type FixType     = RRTypeBV Symbol Symbol FReft
+type FixSort     = RRTypeBV Symbol Symbol NoReft
 
 type LocBareType = F.Located BareType
 type LocBareTypeLHName = F.Located BareTypeLHName

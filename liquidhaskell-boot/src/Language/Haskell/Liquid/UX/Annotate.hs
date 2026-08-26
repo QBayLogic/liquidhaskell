@@ -77,7 +77,7 @@ import           Language.Haskell.Liquid.Types.Types
 
 -- | @output@ creates the pretty printed output
 --------------------------------------------------------------------------------------------
-mkOutput :: Config -> ErrorResult -> FInfo a -> FixDelayedSolution -> AnnInfo (Annot SpecType) -> Output Doc
+mkOutput :: Config -> ErrorResult -> FInfo a -> FixDelayedSolution -> AnnInfo (Annot FixType) -> Output Doc
 --------------------------------------------------------------------------------------------
 mkOutput cfg res si sol anna
   = O { o_vars   = Nothing
@@ -294,7 +294,7 @@ mkAnnMapBinders cfg (AI m)
     bindStr (x, v) = (maybe "_" (symbolString . shorten . symbol) x, render v)
     shorten        = if shortNames cfg then dropModuleNames else id
 
-closeAnnots :: AnnInfo (Annot SpecType) -> AnnInfo SpecType
+closeAnnots :: AnnInfo (Annot FixType) -> AnnInfo FixType
 closeAnnots = closeA . filterA . collapseA
 
 closeA :: AnnInfo (Annot b) -> AnnInfo b

@@ -7,7 +7,7 @@ import Language.Fixpoint.Types.Visitor
 -- import Control.Applicative                 ((<$>))
 
 
-simplifyBounds :: SpecType -> SpecType
+simplifyBounds :: RTypeBV b v c tv (RReftBV b v) -> RTypeBV b v c tv (RReftBV b v)
 simplifyBounds = fmap go
   where
     go x       = x { ur_reft = go' $ ur_reft x }
