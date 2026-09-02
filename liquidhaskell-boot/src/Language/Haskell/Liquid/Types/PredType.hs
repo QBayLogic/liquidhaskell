@@ -183,29 +183,18 @@ strengthenRType wkT wrT = maybe wkT (strengthen wkT) (stripRTypeBase wrT)
 dcWrapSpecType :: Bool -> DataCon -> DataConP -> SpecType
 dcWrapSpecType allowTC dc (DataConP _ _ vs ps cs yts rt _ _ _)
   = {- F.tracepp ("dcWrapSpecType: " ++ show dc ++ " " ++ F.showpp rt) $ -}
-    mkArrow makeVars' ps ts' rt'
+    mkArrow makeVars' ps ts' rt
   where
     isCls    = Ghc.isClassTyCon $ Ghc.dataConTyCon dc
     (as0, sts) = unzip (reverse yts)
-    as = map lhNameToResolvedSymbol as0
-    as1 = map lhNameToUnqualifiedSymbol as0
-    mkDSym z = F.symbol z `F.suffixSymbol` F.symbol dc
-    bs       = mkDSym <$> as
-    tx _  []     []     []     = []
-    tx su (x:xs) (y:ys) (t:ts) = (y, classRFInfo allowTC , if allowTC && isCls then t else F.subst (F.mkSubst su) t, mempty)
-                               : tx ((x, F.EVar y):su) xs ys ts
-    tx _ _ _ _ = panic Nothing "PredType.dataConPSpecType.tx called on invalid inputs"
-    yts'     = tx [] as1 bs sts
-    ts'      = map ("" , classRFInfo allowTC , , mempty) cs ++ yts'
-    subst    = F.mkSubst [(x, F.EVar y) | (x, y) <- zip as1 bs]
-    rt'      = F.subst subst rt
+    ts'      = map ("" , classRFInfo allowTC , , mempty) $ cs ++ sts
     makeVars = filter (`elem` fvs) $ zipWith (\v a -> RTVar v (rTVarInfo a :: RTVInfo RSort)) vs (fst $ splitForAllTyCoVars $ dataConRepType dc)
     makeVars :: [RTVar
                     RTyVar
                     (RTypeBV
                        LHName LHName (RTyConBV LHName LHName) RTyVar (NoReftB LHName))]
     makeVars' = map (, mempty) makeVars
-    fvs = freeTyVars $ mkArrow [] ps ts' rt'
+    fvs = freeTyVars $ mkArrow [] ps ts' rt
 
 dataConTy :: IsReft r
           => M.HashMap RTyVar (RType RTyCon RTyVar r)
@@ -257,8 +246,8 @@ pvarRType (PV _ k {- (PVProp τ) -} _ args) = rpredType k (fst3 <$> args) -- (ty
   --   tys = uRTypeGen . fst3 <$> args
 
 rpredType :: IsReft r
-          => RType RTyCon tv a
-          -> [RType RTyCon tv a] -> RType RTyCon tv r
+          => RTypeBV b v RTyCon tv a
+          -> [RTypeBV b v RTyCon tv a] -> RTypeBV b v RTyCon tv r
 rpredType t ts = RApp predRTyCon  (uRTypeGen <$> t : ts) [] trueReft
 
 predRTyCon   :: RTyCon
@@ -459,8 +448,8 @@ freeArgsPsRef p (MkUReft _ (Pr ps)) = [x | (_, x, w) <- concatMap pargs ps', F.E
    ps' = f <$> filter (uPVar p ==) ps
    f q = q {pargs = pargs q ++ drop (length (pargs q)) (pargs $ uPVar p)}
 
-meetListWithPSubs :: (Foldable t, PPrint t1, F.Subable b, F.Variable b ~ F.Symbol, Meet b)
-                  => t (PVar t1) -> [(F.Symbol, RSort)] -> b -> b -> b
+meetListWithPSubs :: (Foldable t, PPrint t1, F.Subable r, F.Variable r ~ v, Meet r)
+                  => t (PVarBV v v t1) -> [(v, z)] -> r -> r -> r
 meetListWithPSubs πs ss r1 r2    = L.foldl' (meetListWithPSub ss r1) r2 πs
 
 meetListWithPSubsRef :: (Foldable t, Meet (RType c tv r), TyConable c, IsReft r, F.Subable r, F.Variable r ~ F.Symbol, ReftBind r ~ F.Symbol)
@@ -471,7 +460,7 @@ meetListWithPSubsRef :: (Foldable t, Meet (RType c tv r), TyConable c, IsReft r,
                      -> Ref τ (RType c tv r)
 meetListWithPSubsRef πs ss r1 r2 = L.foldl' (meetListWithPSubRef ss r1) r2 πs
 
-meetListWithPSub ::  (PPrint t, F.Subable r, F.Variable r ~ F.Symbol, Meet r) => [(F.Symbol, RSort)]-> r -> r -> PVar t -> r
+meetListWithPSub ::  (PPrint t, F.Subable r, F.Variable r ~ F.Symbol, Meet r) => [(v, z)] -> r -> r -> PVarBV v v t -> r
 meetListWithPSub ss r1 r2 π
   | all (\(_, x, F.EVar y) -> x == y) (pargs π)
   = r2 `meet` r1

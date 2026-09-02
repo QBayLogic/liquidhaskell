@@ -183,7 +183,7 @@ uRType          = fmap uTop
 uRType'         ::  RType c tv (UReft a) -> RType c tv a
 uRType'         = fmap ur_reft
 
-uRTypeGen       :: IsReft b => RType c tv a -> RType c tv b
+uRTypeGen       :: IsReft r => RTypeBV b v c tv a -> RTypeBV b v c tv r
 uRTypeGen       = fmap $ const trueReft
 
 uPVar           :: PVarBV b v t -> UsedPVarBV b v
