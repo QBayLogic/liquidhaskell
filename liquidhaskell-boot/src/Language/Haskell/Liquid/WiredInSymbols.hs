@@ -188,9 +188,9 @@ listTyDataCons   = ( [TyConP l0 c [RTV tyv] [p] [Covariant] [Covariant] (Just fs
       c          = Ghc.listTyCon
       [tyv]      = tyConTyVarsDef c
       t          = rVar tyv :: RSort
-      fld        = "fldList"
-      p          = PV "p" t (F.vv Nothing) [(t, fld, F.EVar fld)]
-      px         = pdVarReft $ PV "p" t (F.vv Nothing) [(t, fld, F.EVar (F.symbol xHead))]
+      fld        = listField
+      p          = PV listPredicate t F.wildcard [(t, fld, F.EVar fld)]
+      px         = pdVarReft $ PV listPredicate t F.wildcard [(t, fld, F.EVar xHead)]
       lt         = rApp c [xt] [rPropP [] $ pdVarReft p] mempty
       xt         = rVar tyv
       xst        = rApp c [RVar (RTV tyv) px] [rPropP [] $ pdVarReft p] mempty
@@ -200,8 +200,8 @@ listTyDataCons   = ( [TyConP l0 c [RTV tyv] [p] [Covariant] [Covariant] (Just fs
 wiredInName :: F.Symbol
 wiredInName = "WiredIn"
 
-tupleTyDataCons :: (Int, [LHName], [LHName]) -> ([TyConP] , [DataConP])
-tupleTyDataCons (n, ~(x1:xs), flds)
+tupleTyDataCons :: (Int, [LHName], [LHName], [LHName]) -> ([TyConP] , [DataConP])
+tupleTyDataCons (n, pnames, ~(x1:xs), flds)
   = ( [TyConP   l0 c  (RTV <$> tyvs) ps tyvarinfo pdvarinfo Nothing]
     , [DataConP l0 dc (RTV <$> tyvs) ps []  cargs  lt False wiredInName l0])
   where
@@ -212,32 +212,29 @@ tupleTyDataCons (n, ~(x1:xs), flds)
     dc            = Ghc.tupleDataCon Boxed n
     tyvs@(tv:tvs) = tyConTyVarsDef c
     (ta:ts)       = (rVar <$> tyvs) :: [RSort]
-    fld           = "fld_Tuple"
-    ps            = mkps pnames (ta:ts) ((fld, F.EVar fld) : zip (F.symbol <$> flds) (F.EVar . F.symbol <$> flds))
+    fld           = F.wildcard :: LHName -- "fld_Tuple"
+    ps            = mkps pnames (ta:ts) ((fld, F.EVar fld) : zip flds (F.EVar <$> flds))
     ups           = uPVar <$> ps
-    pxs           = mkps pnames (ta:ts) ((fld, F.EVar $ F.symbol x1) : zip (F.symbol <$> flds) (F.EVar . F.symbol <$> xs))
+    pxs           = mkps pnames (ta:ts) ((fld, F.EVar x1) : zip flds (F.EVar <$> xs))
     lt            = rApp c (rVar <$> tyvs) (rPropP [] . pdVarReft <$> ups) mempty
     xts           = zipWith (\v p -> RVar (RTV v) (pdVarReft p)) tvs pxs
     cargs         = reverse $ (x1, rVar tv) : zip xs xts
-    pnames        = mks_ "p"
-    mks_ x        = (\i -> F.symbol (x++ show i)) <$> [2..n]
 
-
-mkps :: [F.Symbol]
-     -> [t] -> [(F.Symbol, F.Expr)] -> [PVar t]
+mkps :: [LHName]
+     -> [RSort] -> [(LHName, RExpr)] -> [RPVar]
 mkps ns (t:ts) ((f,x):fxs) = reverse $ mkps_ ns ts fxs [(t, f, x)] []
 mkps _  _      _           = panic Nothing "Bare : mkps"
 
-mkps_ :: [F.Symbol]
-      -> [t]
-      -> [(F.Symbol, F.Expr)]
-      -> [(t, F.Symbol, F.Expr)]
-      -> [PVar t]
-      -> [PVar t]
+mkps_ :: [LHName]
+      -> [RSort]
+      -> [(LHName, RExpr)]
+      -> [(RSort, LHName, RExpr)]
+      -> [RPVar]
+      -> [RPVar]
 mkps_ []     _       _          _    ps = ps
 mkps_ (n:ns) (t:ts) ((f, x):xs) args ps = mkps_ ns ts xs (a:args) (p:ps)
   where
-    p                                   = PV n t (F.vv Nothing) args
+    p                                   = PV n t F.wildcard args
     a                                   = (t, f, x)
 mkps_ _     _       _          _    _ = panic Nothing "Bare : mkps_"
 

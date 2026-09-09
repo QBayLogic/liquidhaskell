@@ -259,19 +259,7 @@ instance ( SubsTy tv (RTypeBV v v c tv (NoReftB v)) c
     | otherwise    = RProp s1 $ t1  `strengthenRefType`
                                 subst (mkSubst $ zip (fst <$> s2) (EVar . fst <$> s1)) t2
 
-instance ( SubsTy tv (RTypeBV v v c tv (NoReftB v)) c
-         , OkRTBV v v c tv r
-         , Variable r ~ v
-         , ReftBind r ~ v
-         , IsReft r
-         , FreeVar c tv
-         , Subable r
-         , SubsTy tv (RTypeBV v v c tv (NoReftB v)) r
-         , SubsTy tv (RTypeBV v v c tv (NoReftB v)) (RTypeBV v v c tv (NoReftB v))
-         , SubsTy tv (RTypeBV v v c tv (NoReftB v)) tv
-         , SubsTy tv (RTypeBV v v c tv (NoReftB v)) (RTVar tv (RTypeBV v v c tv (NoReftB v)))
-         )
-         => Meet (RTPropBV v v c tv r) where
+instance Semigroup (RTPropBV v v c tv r) => Meet (RTPropBV v v c tv r) where
 
 -- TODO: remove and use only Semigroup?
 instance ( SubsTy tv (RTypeBV v v c tv (NoReftB v)) c
@@ -290,14 +278,9 @@ instance ( SubsTy tv (RTypeBV v v c tv (NoReftB v)) c
   mempty  = panic Nothing "mempty: RTProp"
   mappend = (<>)
 
-instance Meet (RRProp (UReftBV LHName LHName RReft))
-instance Meet (RRProp (NoReftB LHName))
-instance Meet (RTProp BTyCon BTyVar (UReft Reft))
-instance Meet (RTProp BTyCon BTyVar NoReft)
-instance Meet (RRProp RReft)
+instance Semigroup (RefB b τ t) => Meet (RefB b τ t) where
 
-instance Semigroup (RType RTyCon RTyVar r) => Meet (RType RTyCon RTyVar r) where
-instance Meet (RType BTyCon BTyVar (UReft Reft))
+instance Semigroup (RTypeBV b v c tv r) => Meet (RTypeBV b v c tv r) where
 
 ----------------------------------------------------------------------------
 -- | Subable Instances -----------------------------------------------------

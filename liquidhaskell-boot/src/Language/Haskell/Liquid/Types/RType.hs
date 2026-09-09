@@ -157,7 +157,6 @@ import           Liquid.GHC.API as Ghc hiding ( Expr
                                                                , angleBrackets
                                                                , brackets
                                                                )
-import           Data.String
 import           GHC.Generics
 import           Prelude                          hiding  (error)
 
@@ -999,16 +998,12 @@ instance F.PPrint RTyVar where
      ppr_tyvar_short :: TyVar -> Doc
      ppr_tyvar_short = text . showPpr
 
-instance (F.PPrint r, F.PPrint t, F.PPrint (RType c tv r)) => F.PPrint (Ref t (RType c tv r)) where
+instance (F.PPrint b, F.PPrint r, F.PPrint t, F.PPrint (RTypeBV b v c tv r), F.Binder b) => F.PPrint (RefB b t (RTypeBV b v c tv r)) where
   pprintTidy k (RProp ss s) = ppRefArgs k (fst <$> ss) <+> F.pprintTidy k s
 
-ppRefArgs :: F.Tidy -> [Symbol] -> Doc
+ppRefArgs :: (F.Binder b, F.PPrint b) => F.Tidy -> [b] -> Doc
 ppRefArgs _ [] = empty
-ppRefArgs k ss = text "\\" <-> hsep (ppRefSym k <$> ss ++ [F.vv Nothing]) <+> "->"
-
-ppRefSym :: (Eq a, IsString a, F.PPrint a) => F.Tidy -> a -> Doc
-ppRefSym _ "" = text "_"
-ppRefSym k s  = F.pprintTidy k s
+ppRefArgs k ss = text "\\" <-> hsep (F.pprintTidy k <$> ss ++ [F.wildcard]) <+> "->"
 
 -------------------------------------------
 

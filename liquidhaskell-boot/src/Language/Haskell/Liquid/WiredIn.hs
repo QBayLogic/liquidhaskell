@@ -10,6 +10,8 @@ module Language.Haskell.Liquid.WiredIn
        , xHead
        , xTail
        , tupleNames
+       , listPredicate
+       , listField
        , papp
 
        , wiredInUniqueBound
@@ -37,14 +39,19 @@ charX = $(logic "charX")
 xHead = $(logic "head")
 xTail = $(logic "tail")
 
-tupleNames :: [(Int, [LHName], [LHName])]
+tupleNames :: [(Int, [LHName], [LHName], [LHName])]
 tupleNames =
   $(listE $ flip map [2..8::Int] $ \n ->
-    let xs = map (logic . F.symbol . (("x_Tuple_"   <> show n) <>) . show) [1..n]
-        fs = map (logic . F.symbol . (("fld_Tuple_" <> show n) <>) . show) [2..n]
+    let ps = map (logic . F.symbol . (("p_Tuple_"   <> show n <> "_") <>) . show) [2..n]
+        xs = map (logic . F.symbol . (("x_Tuple_"   <> show n <> "_") <>) . show) [1..n]
+        fs = map (logic . F.symbol . (("fld_Tuple_" <> show n <> "_") <>) . show) [2..n]
         ln = lift n
-     in tupE [ln, listE xs, listE fs]
+     in tupE [ln, listE ps, listE xs, listE fs]
   )
+
+listPredicate, listField :: LHName
+listPredicate = $(logic "p")
+listField = $(logic "fldList")
 
 papp :: [LHName]
 papp = $(listE $ flip map [0..8::Int] $ \n -> logic (F.symbol $ "papp" <> show n))

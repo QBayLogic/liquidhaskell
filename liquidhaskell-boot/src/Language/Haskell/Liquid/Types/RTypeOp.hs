@@ -230,7 +230,7 @@ bkClass t
 rFun :: IsReft r => b -> RTypeBV b v c tv r -> RTypeBV b v c tv r -> RTypeBV b v c tv r
 rFun b t t' = RFun b defRFInfo t t' trueReft
 
-rFun' :: IsReft r => RFInfo -> Symbol -> RType c tv r -> RType c tv r -> RType c tv r
+rFun' :: IsReft r => RFInfo -> b -> RTypeBV b v c tv r -> RTypeBV b v c tv r -> RTypeBV b v c tv r
 rFun' i b t t' = RFun b i t t' trueReft
 
 rFunDebug :: IsReft r => Symbol -> RType c tv r -> RType c tv r -> RType c tv r
@@ -239,7 +239,7 @@ rFunDebug b t t' = RFun b (classRFInfo True) t t' trueReft
 rCls :: IsReft r => Ghc.TyCon -> [RType RTyCon tv r] -> RType RTyCon tv r
 rCls c ts   = RApp (RTyCon c [] defaultTyConInfo) ts [] trueReft
 
-rRCls :: IsReft r => c -> [RType c tv r] -> RType c tv r
+rRCls :: IsReft r => c -> [RTypeBV b v c tv r] -> RTypeBV b v c tv r
 rRCls rc ts = RApp rc ts [] trueReft
 
 addInvCond :: LHUniqueM m => SpecType -> RReft -> m SpecType
